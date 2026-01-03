@@ -1,0 +1,12 @@
+pandas
+numpy
+scikit-learn>=1.8.0
+tqdm
+fastapi
+uvicorn
+redis
+python-multipart
+pytest
+httpx
+websockets
+joblib
