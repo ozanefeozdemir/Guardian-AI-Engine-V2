@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # 1. Veritabanı
   db:
     image: postgres:13-alpine
     container_name: guardian_db
@@ -14,6 +15,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data/
 
+  # 2. Redis
   redis:
     image: redis:6.2-alpine
     container_name: guardian_redis
@@ -21,9 +23,10 @@ services:
     ports:
       - "6379:6379"
 
+  # 3. API - Dashboard'un beklediği servis adı tam olarak bu (api)
   api:
     build:
-      context: ./Guardian/Guardian-AI-Engine-V2 # Dockerfile'ın olduğu klasör burası
+      context: ./Guardian/Guardian-AI-Engine-V2
     container_name: guardian_api
     working_dir: /app/backend
     command: uvicorn api:app --host 0.0.0.0 --port 8000 --reload
@@ -32,12 +35,11 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql://${POSTGRES_USER:-guardian_user}:${POSTGRES_PASSWORD:-guardian_pass}@db:5432/${POSTGRES_DB:-guardian_db}
-    volumes:
-      - ./Guardian/Guardian-AI-Engine-V2/backend:/app/backend # Dosya yolu güncellendi
     depends_on:
       - db
       - redis
 
+  # 4. Analyze Engine
   engine:
     build:
       context: ./Guardian/Guardian-AI-Engine-V2
@@ -46,19 +48,28 @@ services:
     command: python analyze_engine.py --mode simulation
     environment:
       - REDIS_URL=redis://redis:6379
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - ./Guardian/Guardian-AI-Engine-V2/backend:/app/backend # Dosya yolu güncellendi
     depends_on:
       - redis
 
+  # 5. Dashboard (Asıl Panel - 5173 Portu)
   dashboard:
+    build:
+      context: ./Guardian/guardian-dashboard
+      dockerfile: Dockerfile
+    container_name: guardian_real_dashboard
+    ports:
+      - "5173:80"
+    depends_on:
+      - api # İşte bu satır yukarıdaki 'api' servisine bakıyor
+
+  # 6. Landing (Tanıtım Sitesi - 80 Portu)
+  landing:
     build:
       context: ./guardian-landing
       dockerfile: Dockerfile
-    container_name: guardian_dashboard
+    container_name: guardian_landing
     ports:
-      - "3000:80"
+      - "80:80"
     depends_on:
       - api
 

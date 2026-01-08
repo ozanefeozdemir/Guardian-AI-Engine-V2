@@ -18,8 +18,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "saved_models", "base_rf_2017.pkl")
 SCALER_PATH = os.path.join(BASE_DIR, "saved_models", "scaler_base.pkl")
 # Default Dataset for Simulation
-DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2017", "TrafficLabelling", "Wednesday-workingHours.pcap_ISCX.csv")
-
+# ESKİ HALİNİ YORUMA AL VEYA SİL, BUNU YAZ:
+DEFAULT_DATASET = os.path.join(BASE_DIR, "Wednesday-workingHours.pcap_ISCX.csv")
 class TrafficEngine:
     def __init__(self, mode="simulation", file_path=None):
         self.mode = mode
