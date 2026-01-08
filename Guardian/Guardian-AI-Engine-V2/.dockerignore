@@ -1,0 +1,22 @@
+# Git
+.git
+.gitignore
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.Python
+**/env
+**/venv
+**/.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Datasets (Large files - mount them via volumes instead)
+**/datasets
+backend/datasets
+
+# Ignore saved models if you only want to use the volume mounted ones
+# backend/saved_models

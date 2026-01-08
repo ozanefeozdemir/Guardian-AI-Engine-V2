@@ -1,0 +1,24 @@
+# Gitignore
+__pycache__/
+*.pyc
+.venv/
+env/
+venv/
+.env
+
+# Large Datasets
+# Assuming datasets are in backend/datasets
+backend/datasets/
+datasets/
+*.csv
+*.pcap
+*.zip
+*.rar
+
+# IDE
+.vscode/
+.idea/
+
+# Backend
+backend/saved_models/
+*.pkl

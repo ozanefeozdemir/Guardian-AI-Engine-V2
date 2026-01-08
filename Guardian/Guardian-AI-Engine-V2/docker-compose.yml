@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # 1. Redis (Message Broker)
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+    restart: always
+
+  # 2. API Server (WebSocket Gateway)
+  api:
+    build: .
+    working_dir: /app/backend
+    command: uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./backend:/app/backend
+    depends_on:
+      - redis
+
+  # 3. Analyze Engine (Active Detector)
+  engine:
+    build: .
+    working_dir: /app/backend
+    # Default triggers simulation mode. Override with --mode live for production.
+    command: python analyze_engine.py --mode simulation
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend:/app/backend
+    depends_on:
+      - redis
