@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # 1. PostgreSQL Veritabanı
   db:
     image: postgres:13-alpine
     container_name: guardian_db
@@ -15,7 +14,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data/
 
-  # 2. Redis
   redis:
     image: redis:6.2-alpine
     container_name: guardian_redis
@@ -23,10 +21,9 @@ services:
     ports:
       - "6379:6379"
 
-  # 3. API Server (Backend)
   api:
-    build: 
-      context: ./Guardian # Backend kodlarının olduğu klasör
+    build:
+      context: ./Guardian/Guardian-AI-Engine-V2 # Dockerfile'ın olduğu klasör burası
     container_name: guardian_api
     working_dir: /app/backend
     command: uvicorn api:app --host 0.0.0.0 --port 8000 --reload
@@ -35,31 +32,33 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql://${POSTGRES_USER:-guardian_user}:${POSTGRES_PASSWORD:-guardian_pass}@db:5432/${POSTGRES_DB:-guardian_db}
+    volumes:
+      - ./Guardian/Guardian-AI-Engine-V2/backend:/app/backend # Dosya yolu güncellendi
     depends_on:
       - db
       - redis
 
-  # 4. Analyze Engine
   engine:
-    build: 
-      context: ./Guardian
+    build:
+      context: ./Guardian/Guardian-AI-Engine-V2
     container_name: guardian_engine
     working_dir: /app/backend
     command: python analyze_engine.py --mode simulation
     environment:
       - REDIS_URL=redis://redis:6379
       - PYTHONUNBUFFERED=1
+    volumes:
+      - ./Guardian/Guardian-AI-Engine-V2/backend:/app/backend # Dosya yolu güncellendi
     depends_on:
       - redis
 
-  # 5. Dashboard (İşte burası değişti!)
   dashboard:
     build:
-      context: ./guardian-landing # Dashboard Dockerfile'ının olduğu tam klasör
+      context: ./guardian-landing
       dockerfile: Dockerfile
     container_name: guardian_dashboard
     ports:
-      - "3000:80" # Senin Dockerfile'ında EXPOSE 80 yazdığı için burası 80 olmalı
+      - "3000:80"
     depends_on:
       - api
 
