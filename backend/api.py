@@ -4,14 +4,27 @@ import redis.asyncio as redis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from contextlib import asynccontextmanager
 import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
+from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from database import init_db, get_db, AsyncSessionLocal
+from models import Alert
 
 # --- Configuration ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/dbname")
 ALERT_QUEUE = "alerts_queue"
+
+# --- Database Setup ---
+# (Relies on imports from database.py and models.py)
+
 
 # --- Lifespan (Startup/Shutdown) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 0. Initialize DB Tables
+    await init_db()
+    
     # 1. Connect to Redis
     app.state.redis = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
     try:
@@ -58,7 +71,7 @@ manager = ConnectionManager()
 async def redis_consumer():
     """
     Independent task to consume alerts from Redis Queue (BLPOP).
-    This ensures no alerts are lost even if API is temporarily busy.
+    Persists to Postgres and Broadcasts to WebSockets.
     """
     print(f"Starting Queue Consumer for: {ALERT_QUEUE}")
     
@@ -74,8 +87,37 @@ async def redis_consumer():
                 
                 if result:
                     _, data = result
-                    # Broadcast the JSON string directly to all connected clients
+                    # 1. Broadcast to WebSocket clients
                     await manager.broadcast(data)
+                    
+                    # 2. Persist to Postgres
+                    try:
+                        alert_data = json.loads(data)
+                        async with AsyncSessionLocal() as session:
+                            new_alert = Alert(
+                                timestamp=alert_data.get("timestamp"),
+                                source=str(alert_data.get("source")),
+                                is_attack=bool(alert_data.get("is_attack")),
+                                confidence=float(alert_data.get("confidence", 0.0)),
+                                attack_type=str(alert_data.get("attack_type", "Unknown")),
+                                original_features=alert_data.get("original_features", {})
+                            )
+                            session.add(new_alert)
+                            await session.commit()
+                    except Exception as e:
+                        print(f"DB Save Error: {e}")
+
+                    # 3. Update Stats (Redis for Speed)
+                    try:
+                        alert_json = json.loads(data)
+                        await redis_conn.incr("stats:total_packets")
+                        
+                        if alert_json.get("is_attack"):
+                            await redis_conn.incr("stats:total_attacks")
+                            a_type = alert_json.get("attack_type", "Unknown")
+                            await redis_conn.incr(f"stats:attack_type:{a_type}")
+                    except Exception as e:
+                        print(f"Stats Error: {e}")
                 
                 # Small yield to prevent CPU hogging in case of very loop tight errors
                 # (Though BLPOP handles waiting efficiently)
@@ -107,16 +149,27 @@ async def get_status():
         "status": "online",
         "service": "Guardian AI Engine API",
         "role": "Server/Gateway",
-        "redis": redis_status
+        "redis": redis_status,
+        "database": "postgres"
     }
 
-@app.websocket("/ws/alerts")
+from sqlalchemy import select # Added for get_alerts
+@app.get("/api/alerts")
+async def get_alerts(limit: int = 100, db: AsyncSession = Depends(get_db)):
+    """Get historical alerts from Postgres."""
+    try:
+        stmt = select(Alert).order_by(Alert.id.desc()).limit(limit)
+        result = await db.execute(stmt)
+        alerts = result.scalars().all()
+        return alerts
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.websocket("/ws/live_feed")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection open. We don't expect input from client, 
-            # but we need to await something to keep the loop alive.
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)

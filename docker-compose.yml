@@ -8,7 +8,20 @@ services:
       - "6379:6379"
     restart: always
 
-  # 2. API Server (WebSocket Gateway)
+  # 2. PostgreSQL (Database)
+  postgres:
+    image: "postgres:15-alpine"
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=guardian_ai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+
+  # 3. API Server (WebSocket Gateway)
   api:
     build: .
     working_dir: /app/backend
@@ -17,16 +30,17 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/guardian_ai
     volumes:
       - ./backend:/app/backend
     depends_on:
       - redis
+      - postgres
 
-  # 3. Analyze Engine (Active Detector)
+  # 4. Analyze Engine (Active Detector)
   engine:
     build: .
     working_dir: /app/backend
-    # Default triggers simulation mode. Override with --mode live for production.
     command: python analyze_engine.py --mode simulation
     environment:
       - REDIS_URL=redis://redis:6379
@@ -35,3 +49,6 @@ services:
       - ./backend:/app/backend
     depends_on:
       - redis
+
+volumes:
+  pgdata:

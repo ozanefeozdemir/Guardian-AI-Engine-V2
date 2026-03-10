@@ -10,3 +10,5 @@ pytest
 httpx
 websockets
 joblib
+sqlalchemy
+asyncpg

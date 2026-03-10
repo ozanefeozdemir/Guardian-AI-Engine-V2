@@ -33,7 +33,7 @@ TRAIN_FILES_2017 = [
 ]
 
 # Default 2018 file
-DEFAULT_FILE_2018 = os.path.join(DATASET_DIR_2018, "02-14-2018.csv") # Updated to 03-02 based on user usage
+DEFAULT_FILE_2018 = os.path.join(DATASET_DIR_2018, "03-02-2018.csv") # Updated to 03-02 based on user usage
 # Adaptation Settings
 MODULO_FACTOR = 20 # 5% Calibration
 # Feature Mapping

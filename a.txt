@@ -1,0 +1,65 @@
+Act as a Lead Data Scientist and PyTorch Engineer. I need a complete, production-grade Python script to build the "Guardian" NIDS (Network Intrusion Detection System).
+
+### Project Scope
+We are building a Hybrid IDS that processes network flow data using a sliding window approach.
+* **Primary Dataset:** CIC-IDS2017.
+* **Secondary Dataset (for Generalization):** CSE-CIC-IDS2018 (or similar).
+* **Goal:** Train a Hybrid Autoencoder on PURE BENIGN data from both datasets to learn a generalized "normal," then train a Classifier on attacks.
+
+### Task 1: Data Processing Pipeline (`data_loader.py`)
+Please write a robust Python script using `pandas` and `sklearn` that performs the following:
+
+1.  **Ingestion & Merging:**
+    * Load the CIC-IDS2017 CSV files.
+    * Load the Secondary Dataset (e.g., a sample of CSE-CIC-IDS2018).
+    * **Crucial:** align the column names (standardize them) since they might differ slightly.
+    * Filter both datasets to extract only rows labeled as "BENIGN".
+    * Concatenate these "Benign" DataFrames to create a "Universal Normal" dataset.
+
+2.  **Cleaning & Feature Selection:**
+    * Drop non-behavioral columns to prevent overfitting to specific IPs.
+    * **Drop List:** `['Flow ID', 'Source IP', 'Source Port', 'Destination IP', 'Destination Port', 'Protocol', 'Timestamp', 'SimillarHTTP']`.
+    * Handle infinite values and NaNs (replace with 0 or mean).
+
+3.  **Normalization:**
+    * Use `MinMaxScaler` from sklearn to scale all features between 0 and 1.
+    * Save the scaler object (using `joblib` or `pickle`) because we need it for the live production system later.
+
+4.  **Sliding Window Generation (Sequence Creation):**
+    * The model requires temporal sequences.
+    * Create a function `create_sequences(data, seq_len=10)` that transforms the 2D dataset `(Rows, Features)` into a 3D array `(Samples, 10, Features)`.
+    * Step size should be 1 (sliding window).
+
+### Task 2: The Hybrid AI Architecture (`model.py`)
+Write a PyTorch model class named `GuardianHybrid` with the following structure:
+
+1.  **Hybrid Encoder (Stage 1):**
+    * Input: `(Batch, 10, Features)`
+    * **Layer 1:** `Conv1d` (Spatial Feature Extraction). Kernel size=3.
+    * **Layer 2:** `LSTM` (Temporal Feature Extraction).
+    * **Bottleneck:** The last hidden state of the LSTM is the `latent_vector`.
+
+2.  **Decoder (Reconstruction):**
+    * Input: `latent_vector`
+    * **Layer:** `LSTM` or `Linear` layers to reconstruct the original `(10, Features)` input.
+
+3.  **Classifier Head (Stage 2):**
+    * This branch attaches to the `latent_vector`.
+    * **Structure:** `Latent Vector` -> `Dense` -> `ReLU` -> `Dropout` -> `Softmax` (Classes: Benign, DDoS, PortScan, WebAttack, Botnet).
+
+4.  **Forward Method:**
+    * Implement a flexible forward pass: `def forward(self, x, mode='train_autoencoder'):`
+    * If `mode == 'train_autoencoder'`, return the reconstruction.
+    * If `mode == 'classify'`, return the class probabilities.
+
+### Task 3: Execution Script (`main.py`)
+Write a short script to demonstrate the usage:
+1.  Load and merge the data.
+2.  Preprocess and window the data.
+3.  Initialize the `GuardianHybrid` model.
+4.  Show a dummy training loop example for the Autoencoder phase (using MSE Loss on Benign data only).
+
+### Requirements
+* Use `torch`, `pandas`, `sklearn`, `numpy`.
+* Ensure the code handles memory efficiently (use proper datatypes).
+* Add comments explaining *why* we drop IPs (to avoid overfitting) and *why* we merge datasets (for generalization).

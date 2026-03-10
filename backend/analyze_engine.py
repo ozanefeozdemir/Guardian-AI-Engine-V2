@@ -19,11 +19,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "saved_models", "base_rf_2017.pkl")
 SCALER_PATH = os.path.join(BASE_DIR, "saved_models", "scaler_base.pkl")
 # Default Dataset for Simulation
-DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2017", "TrafficLabelling", "Wednesday-workingHours.pcap_ISCX.csv")
+DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2017","TrafficLabelling" , "Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv")
 class TrafficEngine:
     def __init__(self, mode="simulation", file_path=None):
         self.mode = mode
         self.file_path = file_path
+        print("adapt file: ",self.file_path)
         self.redis_client = None
         self.model = None
         self.extractor = None
@@ -135,34 +136,45 @@ class TrafficEngine:
             is_attack = p_attack > THRESHOLD
             
             # 2. Construct Result
+            # Clean NaN/Inf from features for valid JSON
+            import math
+            clean_features = {
+                k: (0.0 if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v)
+                for k, v in features.items()
+            }
+            
             result = {
                 "timestamp": time.time(),
                 "source": source_meta,
                 "is_attack": is_attack,
                 "confidence": p_attack,
                 "attack_type": "Malicious" if is_attack else "Benign", 
-                "original_features": features
+                "original_features": clean_features
             }
 
             # 3. Publish to Redis
             self.redis_client.rpush(ALERT_QUEUE, json.dumps(result))
             
             # Log with Ground Truth for Debugging
+            # Log with Ground Truth for Debugging
             if ground_truth_label:
-                # Assuming original label format, check if it contains attack keywords
+                # Determine colors and tags based on correctness
                 is_actually_attack = "benign" not in str(ground_truth_label).lower()
+                truth_str = str(ground_truth_label)
+                pred_str = "Attack" if is_attack else "Benign"
                 
                 if is_actually_attack and not is_attack:
-                    print(f"\033[93m[MISS] IP: {source_meta} | Truth: {ground_truth_label} | Pred: Benign | Conf: {p_attack:.4f}\033[0m")
+                    # MISS (Yellow)
+                    print(f"\033[93m[MISS] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {p_attack:.4f}\033[0m")
                 elif not is_actually_attack and is_attack:
-                    print(f"\033[91m[FALSE ALARM] IP: {source_meta} | Truth: Benign | Pred: Attack | Conf: {p_attack:.4f}\033[0m")
+                    # FALSE ALARM (Red)
+                    print(f"\033[91m[FALSE ALARM] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {p_attack:.4f}\033[0m")
                 elif is_actually_attack and is_attack:
-                    print(f"\033[92m[HIT] IP: {source_meta} | Truth: {ground_truth_label} | Pred: Attack | Conf: {p_attack:.4f}\033[0m")
+                    # HIT (Green)
+                    print(f"\033[92m[HIT] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {p_attack:.4f}\033[0m")
                 else:
-                    # True Negative (Benign detected as Benign)
-                    # Print 10% of benign traffic to show system is alive
-                    if np.random.rand() < 0.10:
-                         print(f"\033[90m[OK] IP: {source_meta} | Traffic Normal | Conf: {1-p_attack:.4f}\033[0m")
+                    # True Negative (Grey) - Clean Log for all benign traffic
+                    print(f"\033[90m[OK] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {1-p_attack:.4f}\033[0m")
 
         except Exception as e:
             print(f"Error processing packet: {e}")
@@ -173,7 +185,7 @@ class TrafficEngine:
             print(f"Error: Dataset not found at {self.file_path}")
             return
 
-        print(f"[Engine] Starting Simulation with {os.path.basename(self.file_path)}...")
+        print(f"[Engine] simulating {os.path.basename(self.file_path)} file")
         
         chunk_size = 500
         total_processed = 0
@@ -205,7 +217,7 @@ class TrafficEngine:
             
             total_processed += len(records)
             print(f"[Engine] Processed: {total_processed} packets...", end='\r')
-            time.sleep(0.1) # Simulate network flow
+            #time.sleep(0.1)  Simulate network flow
 
     def run_live(self):
         """
