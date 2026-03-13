@@ -12,3 +12,5 @@ websockets
 joblib
 sqlalchemy
 asyncpg
+requests
+httpx_ws

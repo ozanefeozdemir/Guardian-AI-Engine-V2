@@ -161,7 +161,19 @@ async def get_alerts(limit: int = 100, db: AsyncSession = Depends(get_db)):
         stmt = select(Alert).order_by(Alert.id.desc()).limit(limit)
         result = await db.execute(stmt)
         alerts = result.scalars().all()
-        return alerts
+        return [
+            {
+                "id": a.id,
+                "timestamp": a.timestamp,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+                "source": a.source,
+                "is_attack": a.is_attack,
+                "confidence": a.confidence,
+                "attack_type": a.attack_type,
+                "original_features": a.original_features,
+            }
+            for a in alerts
+        ]
     except Exception as e:
         return {"error": str(e)}
 
