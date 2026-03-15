@@ -41,9 +41,12 @@ services:
   engine:
     build: .
     working_dir: /app/backend
-    command: python analyze_engine.py --mode simulation
+    command: python analyze_engine.py --mode live
+    stdin_open: true
+    tty: true
+    network_mode: host
     environment:
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://localhost:6379
       - PYTHONUNBUFFERED=1
     volumes:
       - ./backend:/app/backend

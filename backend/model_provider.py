@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
 class BaseModelProvider(ABC):
     """
     Abstract base class for all model providers.
@@ -60,7 +59,6 @@ class BaseModelProvider(ABC):
             "ready": self.is_ready(),
         }
 
-
 class PlaceholderModelProvider(BaseModelProvider):
 
 
@@ -82,8 +80,6 @@ class PlaceholderModelProvider(BaseModelProvider):
 
     def is_ready(self) -> bool:
         return self._ready
-
-
 
 class LegacySklearnProvider(BaseModelProvider):
     """
@@ -186,8 +182,6 @@ class LegacySklearnProvider(BaseModelProvider):
     def is_ready(self) -> bool:
         return self._ready
 
-
-
 class CustomModelProvider(BaseModelProvider):
     """
     🚧 ARKADAŞIN MODELİ İÇİN HAZIR İSKELET 🚧
@@ -269,13 +263,11 @@ class CustomModelProvider(BaseModelProvider):
     def is_ready(self) -> bool:
         return self._ready
 
-
 PROVIDER_REGISTRY = {
     "placeholder": PlaceholderModelProvider,
     "legacy": LegacySklearnProvider,
     "custom": CustomModelProvider,
 }
-
 
 def get_model_provider(provider_name: str = None, **kwargs) -> BaseModelProvider:
     """

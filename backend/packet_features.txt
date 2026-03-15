@@ -1,0 +1,55 @@
+###[ Ethernet ]###
+  dst       = 80:b6:55:50:00:0a
+  src       = 4c:77:6d:d7:9e:00
+  type      = IPv4
+###[ IP ]###
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 40
+     id        = 46278
+     flags     = DF
+     frag      = 0
+     ttl       = 94
+     proto     = tcp
+     chksum    = 0xbbf
+     src       = 20.189.173.9
+     dst       = 10.1.144.131
+     \options   \
+###[ TCP ]###
+        sport     = https
+        dport     = 62067
+        seq       = 1937731135
+        ack       = 2611176975
+        dataofs   = 5
+        reserved  = 0
+        flags     = A
+        window    = 16387
+        chksum    = 0x3be6
+        urgptr    = 0
+        options   = []
+###[ Padding ]###
+           load      = b'\x00\x00\x00\x00\x00\x00'
+
+{'ip_version': 4,
+ 'ip_ihl': 5,
+  'ip_tos': 0,
+   'ip_len': 40,
+    'ip_id': 31088,
+     'ip_flags': '',
+      'ip_frag': 0,
+       'ip_ttl': 117,
+        'ip_proto': 6,
+         'ip_chksum': 22751,
+          'ip_src': '192.178.24.74',
+           'ip_dst': '10.1.144.131',
+            'tcp_sport': 443,
+             'tcp_dport': 57407,
+              'tcp_seq': 3352621687,
+               'tcp_ack': 3075131055,
+                'tcp_dataofs': 5,
+                 'tcp_reserved': 0,
+                  'tcp_flags': 'A',
+                   'tcp_window': 1100,
+                    'tcp_chksum': 7622,
+                     'tcp_urgptr': 0}

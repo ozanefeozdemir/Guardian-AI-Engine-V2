@@ -1,29 +1,34 @@
+try:    
+    import os
+    import json
+    import time
+    import pandas as pd
+    import numpy as np
+    import redis
+    import argparse
+    import asyncio
+    import math
+    from scapy.all import sniff
+    from scapy.layers.inet import IP, TCP, UDP
+    from feature_extractor import MAPPING
+    from model_provider import get_model_provider
+    from packet_sniffer import PacketSniffer
+except ImportError:
+    print("Error: Missing required libraries. Please install them using 'pip install -r requirements.txt'")
+    exit(1)
 
-import os
-import json
-import time
-import pandas as pd
-import numpy as np
-import redis
-import argparse
-import asyncio
-from feature_extractor import MAPPING
-from model_provider import get_model_provider
-
-# --- Configuration ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-ALERT_QUEUE = "alerts_queue" # Redis List for Persistent Queue
-THRESHOLD = 0.40 # Increased from 0.50 to reduce false positives from aggressive adaptation
+ALERT_QUEUE = "alerts_queue"
+THRESHOLD = 0.40 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Default Dataset for Simulation
-DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2017","TrafficLabelling" , "Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv")
+
+
+DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2018","02-15-2018.csv")
 
 class TrafficEngine:
-    def __init__(self, mode="simulation", file_path=None, provider_name=None):
+    def __init__(self, mode="simulation", provider_name=None):
         self.mode = mode
-        self.file_path = file_path
-        print("adapt file: ",self.file_path)
         self.redis_client = None
         self.provider = None
         self.provider_name = provider_name
@@ -42,11 +47,7 @@ class TrafficEngine:
 
         # 2. Model Provider
         print(f"[Engine] Initializing Model Provider...")
-        provider_kwargs = {}
-        if self.provider_name == "legacy":
-            provider_kwargs["adapt_file"] = self.file_path
-
-        self.provider = get_model_provider(self.provider_name, **provider_kwargs)
+        self.provider = get_model_provider(self.provider_name)
         self.provider.load()
 
         info = self.provider.get_info()
@@ -65,7 +66,6 @@ class TrafficEngine:
 
             # 2. Construct Result
             # Clean NaN/Inf from features for valid JSON
-            import math
             clean_features = {
                 k: (0.0 if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v)
                 for k, v in features.items()
@@ -80,34 +80,28 @@ class TrafficEngine:
                 "original_features": clean_features
             }
 
-            # 3. Publish to Redis
             self.redis_client.rpush(ALERT_QUEUE, json.dumps(alert))
             
-            # Log with Ground Truth for Debugging
+            # For logging
             if ground_truth_label:
-                # Determine colors and tags based on correctness
                 is_actually_attack = "benign" not in str(ground_truth_label).lower()
                 truth_str = str(ground_truth_label)
                 pred_str = "Attack" if is_attack else "Benign"
                 
                 if is_actually_attack and not is_attack:
-                    # MISS (Yellow)
                     print(f"\033[93m[MISS] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {p_attack:.4f}\033[0m")
                 elif not is_actually_attack and is_attack:
-                    # FALSE ALARM (Red)
                     print(f"\033[91m[FALSE ALARM] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {p_attack:.4f}\033[0m")
                 elif is_actually_attack and is_attack:
-                    # HIT (Green)
                     print(f"\033[92m[HIT] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {p_attack:.4f}\033[0m")
                 else:
-                    # True Negative (Grey) - Clean Log for all benign traffic
                     print(f"\033[90m[OK] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {1-p_attack:.4f}\033[0m")
 
         except Exception as e:
             print(f"Error processing packet: {e}")
 
     def run_simulation(self):
-        """Read from CSV and simulate traffic"""
+        
         if not os.path.exists(self.file_path):
             print(f"Error: Dataset not found at {self.file_path}")
             return
@@ -142,13 +136,25 @@ class TrafficEngine:
             print(f"[Engine] Processed: {total_processed} packets...", end='\r')
 
     def run_live(self):
-        """
-        Placeholder for Scapy Sniffing.
-        """
-        print("[Engine] Starting Live Capture (SCAPY Placeholder)...")
-        while True:
-            time.sleep(1)
+        
+        print("[Engine] Starting Live Capture with Scapy...")
 
+        def packet_callback(packet):
+            # Only process IPv4 packets
+            if IP in packet:
+                src_ip = packet[IP].src
+                
+                # Extract basic features from a single packet constraint.
+                # Important limitation: The models trained on CIC-IDS expect flow-level features
+                # (aggregated traffic over a time window). For a robust production environment,
+                # you would track flow states (e.g. 5-tuples) instead of evaluating ad-hoc packets.
+                packet_len = len(packet)
+                features = PacketSniffer.extract_features_from_packet(packet)
+                # Send features to the core prediction logic
+                self.process_packet(features, src_ip)
+        print("[Engine] Sniffing started. (Press Ctrl+C to stop)")
+        
+        sniff(prn=packet_callback, store=False)
     def start(self):
         self.initialize()
         if self.mode == 'simulation':
@@ -160,9 +166,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=['simulation', 'live'], default='simulation', help="Operation mode")
     parser.add_argument("--file", default=DEFAULT_DATASET, help="Path to CSV for simulation")
-    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom'], default=None, 
+    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom'], default='legacy', 
                         help="Model provider (default: reads MODEL_PROVIDER env var, fallback: legacy)")
     args = parser.parse_args()
     
-    engine = TrafficEngine(mode=args.mode, file_path=args.file, provider_name=args.provider)
+    engine = TrafficEngine(mode=args.mode, provider_name=args.provider)
     engine.start()

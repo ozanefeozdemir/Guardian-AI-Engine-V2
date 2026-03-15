@@ -14,3 +14,4 @@ sqlalchemy
 asyncpg
 requests
 httpx_ws
+scapy
