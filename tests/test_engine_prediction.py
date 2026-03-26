@@ -85,25 +85,74 @@ class TestPlaceholderProvider:
         assert info["ready"] is True
 
 
-# ---------- Custom Provider (Not Implemented) ----------
+# ---------- Custom / Guardian Provider ----------
+
+GUARDIAN_MODEL_PATH = os.path.join(os.path.dirname(__file__), '..', 'backend', 'saved_models', 'guardian_complete.pth')
+GUARDIAN_SCALER_PATH = os.path.join(os.path.dirname(__file__), '..', 'backend', 'saved_models', 'guardian_scaler.pkl')
+
 
 class TestCustomProvider:
-    def test_load_raises_not_implemented(self):
-        from model_provider import CustomModelProvider
-        provider = CustomModelProvider()
-        with pytest.raises(NotImplementedError):
-            provider.load()
-
-    def test_predict_raises_not_implemented(self):
-        from model_provider import CustomModelProvider
-        provider = CustomModelProvider()
-        with pytest.raises(NotImplementedError):
-            provider.predict({"Dst Port": 80})
-
     def test_is_not_ready_initially(self):
         from model_provider import CustomModelProvider
         provider = CustomModelProvider()
         assert provider.is_ready() is False
+
+    def test_load_raises_file_not_found_without_files(self):
+        """Model/scaler dosyaları yoksa FileNotFoundError fırlatır."""
+        from model_provider import CustomModelProvider
+        provider = CustomModelProvider(model_path="nonexistent.pth", scaler_path="nonexistent.pkl")
+        with pytest.raises(FileNotFoundError):
+            provider.load()
+
+    def test_guardian_alias_in_registry(self):
+        """'guardian' ismiyle registry'den alınabilir."""
+        from model_provider import get_model_provider
+        provider = get_model_provider("guardian")
+        assert provider.__class__.__name__ == "CustomModelProvider"
+
+    def test_sliding_window_constants(self):
+        from model_provider import CustomModelProvider
+        assert CustomModelProvider.SEQ_LEN == 10
+        assert 0 in CustomModelProvider.CLASS_NAMES  # Benign
+        assert len(CustomModelProvider.CLASS_NAMES) == 5
+
+    @pytest.mark.integration
+    def test_load_succeeds(self):
+        if not os.path.exists(GUARDIAN_MODEL_PATH) or not os.path.exists(GUARDIAN_SCALER_PATH):
+            pytest.skip("Guardian model files not found (run model/train.py first)")
+        from model_provider import CustomModelProvider
+        provider = CustomModelProvider()
+        provider.load()
+        assert provider.is_ready()
+
+    @pytest.mark.integration
+    def test_predict_warmup_phase(self):
+        """İlk 9 paket warmup döndürmeli."""
+        if not os.path.exists(GUARDIAN_MODEL_PATH) or not os.path.exists(GUARDIAN_SCALER_PATH):
+            pytest.skip("Guardian model files not found")
+        from model_provider import CustomModelProvider
+        provider = CustomModelProvider()
+        provider.load()
+        result = provider.predict({"Dst Port": 80, "Tot Fwd Pkts": 10})
+        assert result["is_attack"] is False
+        assert "Warmup" in result["attack_type"]
+
+    @pytest.mark.integration
+    def test_predict_returns_required_keys_after_warmup(self):
+        """10 paketten sonra gerçek tahmin döndürmeli."""
+        if not os.path.exists(GUARDIAN_MODEL_PATH) or not os.path.exists(GUARDIAN_SCALER_PATH):
+            pytest.skip("Guardian model files not found")
+        from model_provider import CustomModelProvider
+        provider = CustomModelProvider()
+        provider.load()
+        # Feed 10 packets to fill the window
+        for _ in range(10):
+            result = provider.predict({"Dst Port": 80, "Tot Fwd Pkts": 5})
+        assert "is_attack" in result
+        assert "confidence" in result
+        assert "attack_type" in result
+        assert 0.0 <= result["confidence"] <= 1.0
+        assert isinstance(result["is_attack"], bool)
 
 
 # ---------- Legacy Provider (Integration) ----------

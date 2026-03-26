@@ -173,7 +173,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=['simulation', 'live'], default='simulation', help="Operation mode")
     parser.add_argument("--file", default=DEFAULT_DATASET, help="Path to CSV for simulation")
-    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom'], default='legacy', 
+    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom', 'guardian'], default='legacy', 
                         help="Model provider (default: reads MODEL_PROVIDER env var, fallback: legacy)")
     args = parser.parse_args()
     
