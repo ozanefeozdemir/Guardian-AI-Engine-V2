@@ -19,6 +19,4 @@ datasets/
 .vscode/
 .idea/
 
-# Backend
-backend/saved_models/
-*.pkl
+
