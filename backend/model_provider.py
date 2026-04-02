@@ -188,12 +188,12 @@ class CustomModelProvider(BaseModelProvider):
     """
     GuardianHybrid PyTorch Model Provider
     
-    model/ klasöründeki Conv1d + LSTM tabanlı hybrid modeli yükler.
+    model/sunum-model/ klasöründeki Conv1d + LSTM tabanlı hybrid modeli yükler.
     Sliding window buffer ile 10-adımlık sekans oluşturup modele verir.
     5 sınıf: Benign, DDoS, PortScan, WebAttack, Botnet
     
     Kullanım:
-        1. Model eğitimi: python model/train.py --phase all
+        1. Model eğitimi: python model/sunum-model/train.py --phase all
            → backend/saved_models/guardian_complete.pth + backend/saved_models/guardian_scaler.pkl
         2. Engine: python backend/analyze_engine.py --provider guardian
     """
@@ -228,7 +228,7 @@ class CustomModelProvider(BaseModelProvider):
         if not os.path.exists(self.scaler_path):
             raise FileNotFoundError(
                 f"Scaler dosyası bulunamadı: {self.scaler_path}\n"
-                "Önce modeli eğitin: python model/train.py --phase all"
+                "Önce modeli eğitin: python model/sunum-model/train.py --phase all"
             )
         self.scaler = joblib.load(self.scaler_path)
         print(f"[GuardianProvider] Scaler yüklendi: {self.scaler_path}")
@@ -245,14 +245,14 @@ class CustomModelProvider(BaseModelProvider):
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(
                 f"Model dosyası bulunamadı: {self.model_path}\n"
-                "Önce modeli eğitin: python model/train.py --phase all"
+                "Önce modeli eğitin: python model/sunum-model/train.py --phase all"
             )
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # GuardianHybrid sınıfını import et
-        # model/ klasörünü sys.path'e ekle
-        model_dir = os.path.join(self.PROJECT_ROOT, "model")
+        # model/sunum-model/ klasörünü sys.path'e ekle
+        model_dir = os.path.join(self.PROJECT_ROOT, "model", "sunum-model")
         if model_dir not in sys.path:
             sys.path.insert(0, model_dir)
         from model import GuardianHybrid

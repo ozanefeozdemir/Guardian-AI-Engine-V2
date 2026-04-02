@@ -50,7 +50,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./backend:/app/backend
-      - ./model:/app/model
+      - ./model/sunum-model:/app/model/sunum-model
     depends_on:
       - redis
 
