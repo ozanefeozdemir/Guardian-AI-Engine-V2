@@ -13,6 +13,7 @@ try:
     from feature_extractor import MAPPING
     from model_provider import get_model_provider
     from packet_sniffer import PacketSniffer
+    from packet_flow import CICFlowTracker
 except ImportError:
     print("Error: Missing required libraries. Please install them using 'pip install -r requirements.txt'")
     exit(1)
@@ -136,25 +137,31 @@ class TrafficEngine:
             print(f"[Engine] Processed: {total_processed} packets...", end='\r')
 
     def run_live(self):
-        
-        print("[Engine] Starting Live Capture with Scapy...")
+        """
+        Canlı trafik yakalama — Flow bazlı analiz.
+        Paketler 5-tuple bazlı flow'lara gruplanır, flow kapandığında
+        (FIN/RST veya timeout) feature'lar çıkarılıp modele gönderilir.
+        """
+        print("[Engine] Starting Live Capture (Flow-Based)...")
+
+        def on_flow_ready(features, src_ip, dst_ip):
+            """Flow kapandığında çağrılır → model prediction → Redis."""
+            self.process_packet(features, f"{src_ip}")
+
+        tracker = CICFlowTracker(timeout=120.0, on_flow_ready=on_flow_ready)
 
         def packet_callback(packet):
-            # Only process IPv4 packets
             if IP in packet:
-                src_ip = packet[IP].src
-                
-                # Extract basic features from a single packet constraint.
-                # Important limitation: The models trained on CIC-IDS expect flow-level features
-                # (aggregated traffic over a time window). For a robust production environment,
-                # you would track flow states (e.g. 5-tuples) instead of evaluating ad-hoc packets.
-                packet_len = len(packet)
-                features = PacketSniffer.extract_features_from_packet(packet)
-                # Send features to the core prediction logic
-                self.process_packet(features, src_ip)
-        print("[Engine] Sniffing started. (Press Ctrl+C to stop)")
-        
-        sniff(prn=packet_callback, store=False)
+                tracker.process_packet(packet)
+
+        print("[Engine] Flow tracking started. (Press Ctrl+C to stop)")
+        try:
+            sniff(prn=packet_callback, store=False)
+        except KeyboardInterrupt:
+            print("\n[Engine] Stopping... Flushing remaining flows.")
+            tracker.flush_all()
+            print("[Engine] Done.")
+    
     def start(self):
         self.initialize()
         if self.mode == 'simulation':
@@ -166,7 +173,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=['simulation', 'live'], default='simulation', help="Operation mode")
     parser.add_argument("--file", default=DEFAULT_DATASET, help="Path to CSV for simulation")
-    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom'], default='legacy', 
+    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom', 'guardian'], default='legacy', 
                         help="Model provider (default: reads MODEL_PROVIDER env var, fallback: legacy)")
     args = parser.parse_args()
     

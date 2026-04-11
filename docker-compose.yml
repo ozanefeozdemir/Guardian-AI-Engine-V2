@@ -41,7 +41,7 @@ services:
   engine:
     build: .
     working_dir: /app/backend
-    command: python analyze_engine.py --mode live
+    command: python analyze_engine.py --mode live --provider guardian
     stdin_open: true
     tty: true
     network_mode: host
@@ -50,6 +50,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./backend:/app/backend
+      - ./model/sunum-model:/app/model/sunum-model
     depends_on:
       - redis
 
