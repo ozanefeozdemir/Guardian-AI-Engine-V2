@@ -27,12 +27,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2018","02-15-2018.csv")
 
 class TrafficEngine:
-    def __init__(self, mode="simulation", provider_name=None):
+    def __init__(self, mode="simulation", file_path=None, provider_name=None):
         self.mode = mode
+        self.file_path = file_path
         self.redis_client = None
         self.provider = None
         self.provider_name = provider_name
-
     def initialize(self):
         """Connect to Redis and Load Model Provider"""
         # 1. Redis
@@ -170,5 +170,6 @@ if __name__ == "__main__":
                         help="Model provider (default: reads MODEL_PROVIDER env var, fallback: legacy)")
     args = parser.parse_args()
     
-    engine = TrafficEngine(mode=args.mode, provider_name=args.provider)
+    # file_path argümanını motorun içine gönderiyoruz:
+    engine = TrafficEngine(mode=args.mode, file_path=args.file, provider_name=args.provider)
     engine.start()
