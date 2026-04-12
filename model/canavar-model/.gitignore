@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Data files - NEVER commit raw data
+data/raw/*.csv
+data/raw/*.csv.gz
+data/processed/*.parquet
+data/splits/**/*.parquet
+
+# Checkpoints
+checkpoints/**/*.pt
+checkpoints/**/*.pth
+
+# Results
+results/metrics/*.json
+results/metrics/*.csv
+results/plots/*.png
+results/plots/*.html
+results/shap/*
+results/logs/*
+
+# Environment
+.env
+.venv/
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# W&B
+wandb/

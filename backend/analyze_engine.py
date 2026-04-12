@@ -12,8 +12,8 @@ try:
     from scapy.layers.inet import IP, TCP, UDP
     from feature_extractor import MAPPING
     from model_provider import get_model_provider
-    from packet_sniffer import PacketSniffer
     from packet_flow import CICFlowTracker
+    from nfv3_flow_tracker import NFv3FlowTracker
 except ImportError:
     print("Error: Missing required libraries. Please install them using 'pip install -r requirements.txt'")
     exit(1)
@@ -28,8 +28,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2018","02-15-2018.csv")
 
 class TrafficEngine:
-    def __init__(self, mode="simulation", provider_name=None):
+    def __init__(self, mode="simulation", provider_name=None, file_path=None):
         self.mode = mode
+        self.file_path = file_path or DEFAULT_DATASET
         self.redis_client = None
         self.provider = None
         self.provider_name = provider_name
@@ -84,7 +85,7 @@ class TrafficEngine:
             self.redis_client.rpush(ALERT_QUEUE, json.dumps(alert))
             
             # For logging
-            if ground_truth_label:
+            if ground_truth_label is not None:
                 is_actually_attack = "benign" not in str(ground_truth_label).lower()
                 truth_str = str(ground_truth_label)
                 pred_str = "Attack" if is_attack else "Benign"
@@ -97,6 +98,19 @@ class TrafficEngine:
                     print(f"\033[92m[HIT] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {p_attack:.4f}\033[0m")
                 else:
                     print(f"\033[90m[OK] IP: {source_meta} | Truth: {truth_str} | Pred: {pred_str} | Conf: {1-p_attack:.4f}\033[0m")
+            else:
+                # Live mode logging
+                pred_str = "ATTACK" if is_attack else "Benign"
+                color = "\033[91m [!] " if is_attack else "\033[92m [OK] "
+                
+                proto = features.get("PROTOCOL", features.get("Protocol", "?"))
+                dur = features.get("FLOW_DURATION_MILLISECONDS", features.get("Flow Duration", 0))
+                if isinstance(dur, (int, float)):
+                    dur_str = f"{dur:.1f}ms"
+                else:
+                    dur_str = f"{dur}"
+                    
+                print(f"{color}IP: {source_meta:<35} | Pred: {pred_str:<8} | Type: {result.get('attack_type', ''):<10} | Conf: {p_attack:.4f} | Proto: {proto} | Dur: {dur_str}\033[0m")
 
         except Exception as e:
             print(f"Error processing packet: {e}")
@@ -138,25 +152,38 @@ class TrafficEngine:
 
     def run_live(self):
         """
-        Canlı trafik yakalama — Flow bazlı analiz.
-        Paketler 5-tuple bazlı flow'lara gruplanır, flow kapandığında
-        (FIN/RST veya timeout) feature'lar çıkarılıp modele gönderilir.
+        Canli trafik yakalama -- Flow bazli analiz.
+        Paketler 5-tuple bazli flow'lara gruplanir, flow kapandiginda
+        (FIN/RST veya timeout) feature'lar cikarilip modele gonderilir.
+
+        Provider'a gore farkli tracker kullanilir:
+          - flowguard -> NFv3FlowTracker (53 NF-v3 feature)
+          - digerleri -> CICFlowTracker (79 CIC-IDS feature)
         """
-        print("[Engine] Starting Live Capture (Flow-Based)...")
+        # FlowGuard provider icin NF-v3 tracker, digerleri icin CIC tracker
+        use_nfv3 = (self.provider_name == 'flowguard')
+        tracker_name = "NF-v3" if use_nfv3 else "CIC-IDS"
+        print(f"[Engine] Starting Live Capture ({tracker_name} Flow-Based)...")
 
         def on_flow_ready(features, src_ip, dst_ip):
-            """Flow kapandığında çağrılır → model prediction → Redis."""
-            self.process_packet(features, f"{src_ip}")
+            """Flow kapandiginda cagirilir -> model prediction -> Redis."""
+            self.process_packet(features, f"{src_ip}->{dst_ip}")
 
-        tracker = CICFlowTracker(timeout=120.0, on_flow_ready=on_flow_ready)
+        if use_nfv3:
+            tracker = NFv3FlowTracker(timeout=120.0, on_flow_ready=on_flow_ready)
+        else:
+            tracker = CICFlowTracker(timeout=120.0, on_flow_ready=on_flow_ready)
 
         def packet_callback(packet):
             if IP in packet:
                 tracker.process_packet(packet)
 
         print("[Engine] Flow tracking started. (Press Ctrl+C to stop)")
+        # Kendi trafigini (Redis, Postgres, API) analiz etmemesi icin BPF filter (Sonsuz dongu ve False Positive engeller)
+        bpf_filter = "not (port 6379 or port 5432 or port 8000)"
+        
         try:
-            sniff(prn=packet_callback, store=False)
+            sniff(prn=packet_callback, store=False, filter=bpf_filter)
         except KeyboardInterrupt:
             print("\n[Engine] Stopping... Flushing remaining flows.")
             tracker.flush_all()
@@ -173,9 +200,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=['simulation', 'live'], default='simulation', help="Operation mode")
     parser.add_argument("--file", default=DEFAULT_DATASET, help="Path to CSV for simulation")
-    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom', 'guardian'], default='legacy', 
+    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom', 'guardian', 'flowguard'], default='legacy', 
                         help="Model provider (default: reads MODEL_PROVIDER env var, fallback: legacy)")
     args = parser.parse_args()
     
-    engine = TrafficEngine(mode=args.mode, provider_name=args.provider)
+    engine = TrafficEngine(mode=args.mode, provider_name=args.provider, file_path=args.file)
     engine.start()

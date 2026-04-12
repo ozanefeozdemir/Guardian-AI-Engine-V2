@@ -5,14 +5,15 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libpcap-dev \
+    tcpdump \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirements.txt .
+COPY requirements-base.txt .
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements-base.txt
 
-# Install Dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
+COPY requirements-app.txt .
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements-app.txt
 # Copy Backend Code
 COPY backend /app/backend
 

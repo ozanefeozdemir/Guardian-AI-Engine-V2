@@ -1,0 +1,70 @@
+# Phase 5 – Adversarial Hardening
+# Improve robustness against adversarial flow perturbations.
+
+inherits: base.yaml
+
+phase: 5
+name: adversarial_hardening
+
+adversarial:
+  attacks:
+    - name: pgd
+      epsilon: 0.03
+      alpha: 0.007
+      steps: 10
+      random_start: true
+    - name: fgsm
+      epsilon: 0.03
+    - name: cw
+      confidence: 0.01
+      learning_rate: 0.01
+      max_iterations: 100
+
+  training:
+    method: adversarial_training   # adversarial_training | trades
+    trades_beta: 6.0               # only used if method=trades
+    mix_ratio: 0.5                 # fraction of adversarial examples per batch
+    attack_for_training: pgd
+    pgd_steps_train: 7
+    epsilon_schedule: linear       # linear | constant
+    epsilon_start: 0.01
+    epsilon_end: 0.03
+    warmup_epochs: 5
+
+training:
+  epochs: 50
+  batch_size: 512
+  optimizer:
+    type: adamw
+    lr: 0.0001
+    weight_decay: 0.01
+  scheduler:
+    type: cosine
+    T_max: 50
+    eta_min: 0.000001
+  gradient_clip: 1.0
+
+model:
+  # Load from Phase 4 adapted model
+  pretrained: checkpoints/phase4/fewshot_best.pt
+  encoder:
+    input_dim: 53
+    model_dim: 128
+    num_heads: 4
+    num_layers: 4
+    feedforward_dim: 512
+    dropout: 0.1
+  classification_head:
+    output_type: binary
+    hidden_dims: [64]
+
+evaluation:
+  protocol: b
+  adversarial_eval:
+    attacks: [pgd, fgsm, cw]
+    epsilons: [0.01, 0.03, 0.05, 0.1]
+  save_checkpoint: checkpoints/phase5/hardened_best.pt
+
+output:
+  checkpoint_dir: checkpoints/phase5
+  metrics_file: results/metrics/phase5_hardened.json

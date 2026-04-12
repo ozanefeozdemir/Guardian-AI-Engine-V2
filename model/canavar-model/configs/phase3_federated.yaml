@@ -1,0 +1,36 @@
+inherits: base.yaml
+
+phase: 3
+name: federated_learning
+
+federated:
+  server:
+    num_rounds: 10
+    fedprox_mu: 0.01
+    strategy: fedavg
+  client:
+    local_epochs: 2
+    batch_size: 4096
+    balanced_sampling: true
+    gradient_clip_norm: 1.0
+    num_workers: 0
+    optimizer:
+      lr: 0.0001
+      weight_decay: 0.01
+
+model:
+  encoder:
+    input_dim: 53
+    model_dim: 128
+    num_heads: 4
+    num_layers: 4
+    feedforward_dim: 512
+    dropout: 0.1
+  classification_head:
+    output_type: binary
+    hidden_dims: [64]
+  pretrained_encoder: "checkpoints/phase2/best_encoder.pt"
+
+output:
+  checkpoint_dir: checkpoints/phase3
+  metrics_file: results/metrics/phase3_federated.json

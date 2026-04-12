@@ -1,0 +1,51 @@
+inherits: base.yaml
+
+phase: 2
+name: contrastive_pretraining
+
+model:
+  encoder:
+    input_dim: 53
+    model_dim: 128
+    num_heads: 4
+    num_layers: 4
+    feedforward_dim: 512
+    dropout: 0.1
+  projection_head:
+    hidden_dim: 64
+    output_dim: 32
+
+training:
+  epochs: 200
+  batch_size: 1024
+  optimizer:
+    type: adamw
+    lr: 0.0005
+    weight_decay: 0.01
+  scheduler:
+    type: cosine_warmup
+    warmup_epochs: 10
+    T_max: 200
+  contrastive:
+    temperature: 0.07
+    augmentations:
+      feature_masking:
+        enabled: true
+        mask_ratio: 0.2
+      gaussian_noise:
+        enabled: true
+        std: 0.05
+      direction_swap:
+        enabled: true
+        probability: 0.1
+      temporal_jitter:
+        enabled: true
+        jitter_ratio: 0.05
+  monitoring:
+    linear_probe_every: 10
+    save_checkpoint_every: 20
+    linear_probe_label_fraction: 0.01
+
+output:
+  checkpoint_dir: checkpoints/phase2
+  metrics_file: results/metrics/phase2_contrastive.json

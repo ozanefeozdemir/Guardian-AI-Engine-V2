@@ -1,0 +1,42 @@
+# Phase 1 – Supervised Baseline
+# Train a standard MLP classifier on each dataset independently.
+
+inherits: base.yaml
+
+phase: 1
+name: baseline_supervised
+
+training:
+  epochs: 100
+  batch_size: 1024
+  optimizer:
+    type: adamw
+    lr: 0.001
+    weight_decay: 0.01
+  scheduler:
+    type: cosine
+    T_max: 100
+    eta_min: 0.00001
+  loss: cross_entropy
+  class_weight: balanced     # handle class imbalance
+
+model:
+  encoder:
+    type: mlp
+    hidden_dims: [512, 256, 128]
+    latent_dim: 64
+    dropout: 0.3
+    activation: gelu
+    batch_norm: true
+  classifier:
+    hidden_dims: [64, 32]
+    num_classes: 2
+    dropout: 0.2
+
+evaluation:
+  protocol: a
+  save_checkpoint: checkpoints/phase1/baseline_best.pt
+
+output:
+  checkpoint_dir: checkpoints/phase1
+  metrics_file: results/metrics/phase1_baseline.json

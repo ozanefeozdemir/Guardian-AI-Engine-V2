@@ -45,14 +45,15 @@ services:
     stdin_open: true
     tty: true
     network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     environment:
       - REDIS_URL=redis://localhost:6379
       - PYTHONUNBUFFERED=1
     volumes:
       - ./backend:/app/backend
       - ./model/sunum-model:/app/model/sunum-model
-    depends_on:
-      - redis
-
+      - ./model/canavar-model:/app/model/canavar-model
 volumes:
   pgdata:

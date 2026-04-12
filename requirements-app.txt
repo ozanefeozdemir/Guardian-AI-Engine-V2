@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+redis
+python-multipart
+pytest
+httpx
+websockets
+joblib
+sqlalchemy
+asyncpg
+requests
+httpx_ws
+scapy
+pyyaml
+tqdm

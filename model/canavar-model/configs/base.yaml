@@ -1,0 +1,98 @@
+# ═══════════════════════════════════════
+# FlowGuard Base Configuration
+# ═══════════════════════════════════════
+
+project:
+  name: "flowguard"
+  seed: 42
+  device: "auto"   # auto-detect GPU/CPU
+  precision: "fp16" # mixed precision training
+
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  splits_dir: "data/splits"
+
+  # USER MUST MANUALLY PLACE THESE FILES in data/raw/ BEFORE running preprocessing.
+  # Download from: https://staff.itee.uq.edu.au/marius/NIDS_datasets/
+  # The code will NEVER attempt to download anything. It only reads from data/raw/.
+  datasets:
+    - name: "unsw"
+      full_name: "NF-UNSW-NB15-v3"
+      raw_file: "data/raw/NF-UNSW-NB15-v3.csv"
+    - name: "bot"
+      full_name: "NF-BoT-IoT-v3"
+      raw_file: "data/raw/NF-BoT-IoT-v3.csv"
+    - name: "ton"
+      full_name: "NF-ToN-IoT-v3"
+      raw_file: "data/raw/NF-ToN-IoT-v3.csv"
+    - name: "cic"
+      full_name: "NF-CICIDS2018-v3"
+      raw_file: "data/raw/NF-CICIDS2018-v3.csv"
+
+  features:
+    # Features to REMOVE (network identity and timestamps)
+    drop_columns:
+      - "IPV4_SRC_ADDR"
+      - "IPV4_DST_ADDR"
+      - "L4_SRC_PORT"
+      - "L4_DST_PORT"
+      - "FLOW_START_MILLISECONDS"
+      - "FLOW_END_MILLISECONDS"
+
+    # Features to LOG-TRANSFORM (heavy-tailed distributions)
+    log_transform:
+      - "IN_BYTES"
+      - "OUT_BYTES"
+      - "IN_PKTS"
+      - "OUT_PKTS"
+      - "FLOW_DURATION_MILLISECONDS"
+      - "DURATION_IN"
+      - "DURATION_OUT"
+      - "SRC_TO_DST_SECOND_BYTES"
+      - "DST_TO_SRC_SECOND_BYTES"
+      - "RETRANSMITTED_IN_BYTES"
+      - "RETRANSMITTED_IN_PKTS"
+      - "RETRANSMITTED_OUT_BYTES"
+      - "RETRANSMITTED_OUT_PKTS"
+      - "SRC_TO_DST_AVG_THROUGHPUT"
+      - "DST_TO_SRC_AVG_THROUGHPUT"
+      - "SRC_TO_DST_IAT_MIN"
+      - "SRC_TO_DST_IAT_MAX"
+      - "SRC_TO_DST_IAT_AVG"
+      - "SRC_TO_DST_IAT_STDDEV"
+      - "DST_TO_SRC_IAT_MIN"
+      - "DST_TO_SRC_IAT_MAX"
+      - "DST_TO_SRC_IAT_AVG"
+      - "DST_TO_SRC_IAT_STDDEV"
+
+    # Port encoding: replace raw ports with categorical buckets
+    port_buckets:
+      well_known: [0, 1023]
+      registered: [1024, 49151]
+      ephemeral: [49152, 65535]
+
+    # Label column names in the NF-v3 datasets
+    label_binary: "Label"       # 0 = benign, 1 = attack
+    label_multi: "Attack"       # Attack category string
+
+    # Unified attack taxonomy mapping
+    attack_taxonomy:
+      DoS: ["DoS", "dos"]
+      DDoS: ["DDoS", "ddos"]
+      Reconnaissance: ["Reconnaissance", "Recon", "scanning", "Scan"]
+      Backdoor: ["Backdoor", "backdoor"]
+      Exploit: ["Exploits", "Exploit", "exploit"]
+      Botnet: ["Botnet", "botnet", "Bot"]
+      Theft: ["Theft", "theft"]
+      Injection: ["Injection", "injection", "XSS", "xss"]
+      MITM: ["MITM", "mitm"]
+      Ransomware: ["Ransomware", "ransomware"]
+      Password: ["Password", "password"]
+      Other: []
+
+  preprocessing:
+    handle_inf: "clip_to_max"   # Replace inf with column max
+    handle_nan: "fill_zero"     # Replace NaN with 0
+    normalization: "zscore"     # Z-score standardization
+    max_nan_ratio: 0.05         # Flag columns with >5% NaN

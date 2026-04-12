@@ -1,0 +1,54 @@
+# Phase 4 – Few-Shot Domain Adaptation
+inherits: base.yaml
+
+phase: 4
+name: fewshot_adaptation
+
+fewshot:
+  method: prototypical
+  n_way: 2
+  k_shot: 10
+  n_query: 15
+  episodes: 1000
+  eval_episodes: 200
+  finetune:
+    epochs: 20
+    lr: 0.0001
+    freeze_encoder: true
+    unfreeze_after: 10
+
+training:
+  batch_size: 256
+  optimizer:
+    type: adamw
+    lr: 0.0001
+    weight_decay: 0.01
+  scheduler:
+    type: cosine
+    T_max: 20
+    eta_min: 0.000001
+
+model:
+  pretrained: checkpoints/phase3/final_global.pt
+  encoder:
+    input_dim: 53
+    model_dim: 128
+    num_heads: 4
+    num_layers: 4
+    feedforward_dim: 512
+    dropout: 0.1
+  classifier:
+    hidden_dims: [64, 32]
+    num_classes: 2
+    dropout: 0.1
+
+evaluation:
+  protocol: c
+  target_datasets:
+    - unsw_nb15
+    - cicids2018
+  save_checkpoint: checkpoints/phase4/fewshot_best.pt
+
+output:
+  checkpoint_dir: checkpoints/phase4
+  metrics_file: results/metrics/phase4_fewshot.json
