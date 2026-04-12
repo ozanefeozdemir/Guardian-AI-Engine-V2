@@ -15,6 +15,11 @@ asyncpg
 requests
 httpx_ws
 scapy
+asyncpg
+python-jose[cryptography]
+python-multipart
+passlib
+bcrypt==3.2.2
 torch
 pyarrow
 pyyaml
