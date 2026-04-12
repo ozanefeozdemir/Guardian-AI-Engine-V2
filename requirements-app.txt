@@ -13,3 +13,5 @@ httpx_ws
 scapy
 pyyaml
 tqdm
+python-jose[cryptography]
+passlib[bcrypt]

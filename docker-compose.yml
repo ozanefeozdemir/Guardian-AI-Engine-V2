@@ -41,7 +41,7 @@ services:
   engine:
     build: .
     working_dir: /app/backend
-    command: python analyze_engine.py --mode live --provider guardian
+    command: python analyze_engine.py --mode live --provider flowguard
     stdin_open: true
     tty: true
     network_mode: host
@@ -55,5 +55,14 @@ services:
       - ./backend:/app/backend
       - ./model/sunum-model:/app/model/sunum-model
       - ./model/canavar-model:/app/model/canavar-model
+
+  # 5. Frontend UI
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
 volumes:
   pgdata:
