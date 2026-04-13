@@ -354,7 +354,6 @@ class CustomModelProvider(BaseModelProvider):
     def is_ready(self) -> bool:
         return self._ready
 
-
 class FlowGuardProvider(BaseModelProvider):
     """
     FlowGuard Transformer-based NIDS Provider
@@ -645,7 +644,6 @@ class FlowGuardProvider(BaseModelProvider):
             'checkpoint': self.model_path,
         })
         return info
-
 
 PROVIDER_REGISTRY = {
     "placeholder": PlaceholderModelProvider,
