@@ -2,57 +2,49 @@ import os
 import json
 import redis.asyncio as redis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware  # CORS eklendi
 from contextlib import asynccontextmanager
 import asyncio
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from database import init_db, seed_data, get_db, AsyncSessionLocal # seed_data eklendi
+from database import init_db, get_db, AsyncSessionLocal
 from models import Alert, User, AuthLog
 from auth import router as auth_router
-from dotenv import load_dotenv
-
-# .env dosyasını yükle
-load_dotenv()
 
 # --- Configuration ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/dbname")
 ALERT_QUEUE = "alerts_queue"
 
 # --- Lifespan (Startup/Shutdown) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 0. Initialize DB Tables (Tabloları kontrol et/oluştur)
+    # 0. Initialize DB Tables
     await init_db()
     
-    # 1. Seed Default Data (Admin yoksa oluştur)
-    await seed_data()
-    
-    # 2. Connect to Redis
+    # 1. Connect to Redis
     app.state.redis = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
     try:
         await app.state.redis.ping()
-        print(f"✅ Connected to Redis at {REDIS_URL}")
+        print(f"Connected to Redis at {REDIS_URL}")
     except Exception as e:
-        print(f"❌ Warning: Redis connection failed: {e}")
+        print(f"Warning: Redis connection failed: {e}")
         
-    # 3. Start consumer task (Arka plan dinleyicisini başlat)
+    # Start consumer task
     app.state.consumer_task = asyncio.create_task(redis_consumer())
         
     yield
     
-    # Shutdown (Kapatırken temizlik yap)
+    # Shutdown
     if hasattr(app.state, "consumer_task"):
         app.state.consumer_task.cancel()
-    if hasattr(app.state, "redis"):
-        await app.state.redis.close()
+    await app.state.redis.close()
 
 app = FastAPI(title="Guardian AI Engine API", lifespan=lifespan)
-
 # --- Auth Rotalarını Bağlama ---
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 
-# --- CORS Ayarları ---
+# --- CORS Ayarları Eklendi ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -71,8 +63,7 @@ class ConnectionManager:
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+        self.active_connections.remove(websocket)
 
     async def broadcast(self, message: str):
         for connection in self.active_connections:
@@ -85,21 +76,17 @@ manager = ConnectionManager()
 
 # --- Background Consumer ---
 async def redis_consumer():
-    print(f"📡 Starting Queue Consumer for: {ALERT_QUEUE}")
-    # Ayrı bir bağlantı üzerinden Redis dinlemesi yapılır
+    print(f"Starting Queue Consumer for: {ALERT_QUEUE}")
     redis_conn = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
     
     try:
         while True:
             try:
-                # Redis listesinden (queue) veri bekle
                 result = await redis_conn.blpop(ALERT_QUEUE, timeout=1)
                 if result:
                     _, data = result
-                    # WebSocket üzerinden tüm Dashboard'lara bas
                     await manager.broadcast(data)
                     
-                    # Veriyi parse et ve DB'ye kaydet
                     try:
                         alert_data = json.loads(data)
                         async with AsyncSessionLocal() as session:
@@ -114,25 +101,25 @@ async def redis_consumer():
                             session.add(new_alert)
                             await session.commit()
                     except Exception as e:
-                        print(f"❌ DB Save Error: {e}")
+                        print(f"DB Save Error: {e}")
 
-                    # İstatistikleri güncelle
                     try:
-                        await redis_conn.incr("stats:total_packets")
                         alert_json = json.loads(data)
+                        await redis_conn.incr("stats:total_packets")
                         if alert_json.get("is_attack"):
                             await redis_conn.incr("stats:total_attacks")
                             a_type = alert_json.get("attack_type", "Unknown")
                             await redis_conn.incr(f"stats:attack_type:{a_type}")
                     except Exception as e:
-                        print(f"❌ Stats Error: {e}")
+                        print(f"Stats Error: {e}")
                 
                 await asyncio.sleep(0.001) 
                 
             except asyncio.CancelledError:
+                print("Consumer task cancelled.")
                 break
             except Exception as e:
-                print(f"❌ Consumer Loop Error: {e}")
+                print(f"Consumer Error: {e}")
                 await asyncio.sleep(1) 
                 
     finally:
@@ -151,6 +138,7 @@ async def get_status():
     return {
         "status": "online",
         "service": "Guardian AI Engine API",
+        "role": "Server/Gateway",
         "redis": redis_status,
         "database": "postgres"
     }
@@ -177,12 +165,12 @@ async def get_alerts(limit: int = 100, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         return {"error": str(e)}
 
+# --- Adres Düzeltildi ---
 @app.websocket("/ws/alerts")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Dashboard'dan gelen ping/mesajları karşıla (bağlantıyı açık tutar)
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
