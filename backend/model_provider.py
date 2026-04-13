@@ -172,7 +172,8 @@ class LegacySklearnProvider(BaseModelProvider):
         probs = self.model.predict_proba(X_input)[0]
         p_attack = float(probs[1])
 
-        from analyze_engine import THRESHOLD
+        #from analyze_engine import THRESHOLD
+        THRESHOLD = 0.40 # BUNU EKLE (El ile değer veriyoruz ki döngü kırılsın)
         is_attack = p_attack > THRESHOLD
 
         return {

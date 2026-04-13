@@ -1,8 +1,7 @@
-version: '3.8'
-
 services:
   # 1. Redis (Message Broker)
   redis:
+    container_name: guardian-redis
     image: "redis:alpine"
     ports:
       - "6379:6379"
@@ -10,18 +9,19 @@ services:
 
   # 2. PostgreSQL (Database)
   postgres:
+    container_name: guardian-postgres
     image: "postgres:15-alpine"
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=guardian_ai
+      - POSTGRES_USER=guardian_user
+      - POSTGRES_PASSWORD=guardian_pass
+      - POSTGRES_DB=guardian_db
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: always
 
-  # 3. API Server (WebSocket Gateway)
+  # 3. API Server (FastAPI)
   api:
     build: .
     working_dir: /app/backend
@@ -30,14 +30,15 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-guardian_user}:${POSTGRES_PASSWORD:-guardian_pass}@db:5432/${POSTGRES_DB:-guardian_db}
+      # Burada host ismini 'postgres' yaptık çünkü yukarıdaki servis adı o
+      - DATABASE_URL=postgresql+asyncpg://guardian_user:guardian_pass@postgres:5432/guardian_db
     volumes:
       - ./backend:/app/backend
     depends_on:
       - redis
       - postgres
 
-  # 4. Analyze Engine (Active Detector)
+  # 4. Analyze Engine
   engine:
     build: .
     working_dir: /app/backend

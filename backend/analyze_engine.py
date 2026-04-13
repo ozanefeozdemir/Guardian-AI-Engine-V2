@@ -1,5 +1,8 @@
+import os
+import sys
+
+# 1. Import Kontrolü (Hangi kütüphane eksikse şak diye söylesin)
 try:    
-    import os
     import json
     import time
     import pandas as pd
@@ -10,6 +13,7 @@ try:
     import math
     from scapy.all import sniff
     from scapy.layers.inet import IP, TCP, UDP
+    # Proje içi importlar
     from feature_extractor import MAPPING
     from model_provider import get_model_provider
     from packet_flow import CICFlowTracker
@@ -18,14 +22,15 @@ except ImportError:
     print("Error: Missing required libraries. Please install them using 'pip install -r requirements.txt'")
     exit(1)
 
+# .env veya Docker ortamından gelen değişkenler
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 ALERT_QUEUE = "alerts_queue"
-THRESHOLD = 0.40 
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ... (TrafficEngine sınıfın ve diğer mantıklar aynı kalıyor)
 
-DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2018","02-15-2018.csv")
+# analyze_engine.py içinde bul ve değiştir:
+DEFAULT_DATASET = os.path.join(BASE_DIR, "Wednesday-workingHours.pcap_ISCX.csv")
 
 class TrafficEngine:
     def __init__(self, mode="simulation", file_path=None, provider_name=None):
