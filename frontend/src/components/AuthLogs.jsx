@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { ShieldAlert, UserX, UserCheck, RefreshCw } from 'lucide-react';
+import { API_BASE } from '../config';
 
 export default function AuthLogs() {
   const [logs, setLogs] = useState([]);
@@ -9,7 +10,7 @@ export default function AuthLogs() {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const response = await axios.get('http://localhost:8000/api/auth/logs');
+      const response = await axios.get(`${API_BASE}/api/auth/logs`);
       setLogs(response.data);
     } catch (error) {
       console.error('Loglar çekilemedi', error);

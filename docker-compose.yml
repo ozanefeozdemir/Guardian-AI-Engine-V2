@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   # 1. Redis (Message Broker)
@@ -24,37 +23,42 @@ services:
   # 3. API Server (WebSocket Gateway)
   api:
     build: .
+    image: guardian-backend
     working_dir: /app/backend
     command: uvicorn api:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-guardian_user}:${POSTGRES_PASSWORD:-guardian_pass}@db:5432/${POSTGRES_DB:-guardian_db}
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/guardian_ai
     volumes:
       - ./backend:/app/backend
     depends_on:
       - redis
       - postgres
 
-  # 4. Analyze Engine (Active Detector)
-  engine:
-    build: .
-    working_dir: /app/backend
-    command: python analyze_engine.py --mode live --provider flowguard
-    stdin_open: true
-    tty: true
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    environment:
-      - REDIS_URL=redis://localhost:6379
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - ./backend:/app/backend
-      - ./model/sunum-model:/app/model/sunum-model
-      - ./model/canavar-model:/app/model/canavar-model
+  # 4. Analyze Engine — macOS'ta Docker içinde gerçek trafik yakalanamaz.
+  #    Engine'i lokal olarak çalıştır:
+  #    sudo python3 backend/analyze_engine.py --mode live --provider flowguard
+  #
+  #    Linux sunucuda Docker içinde çalıştırmak istersen bu bloğu aç:
+  # engine:
+  #   image: guardian-backend
+  #   working_dir: /app/backend
+  #   command: python analyze_engine.py --mode live --provider flowguard
+  #   stdin_open: true
+  #   tty: true
+  #   network_mode: host
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - NET_RAW
+  #   environment:
+  #     - REDIS_URL=redis://localhost:6379
+  #     - PYTHONUNBUFFERED=1
+  #   volumes:
+  #     - ./backend:/app/backend
+  #     - ./model/sunum-model:/app/model/sunum-model
+  #     - ./model/canavar-model:/app/model/canavar-model
 
   # 5. Frontend UI
   frontend:

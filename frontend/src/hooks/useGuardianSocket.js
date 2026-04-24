@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
+import { WS_BASE } from '../config';
 
 // Backend Docker üzerinde 8000 portundan yayın yapıyor
-const SOCKET_URL = "ws://localhost:8000/ws";
+const SOCKET_URL = `${WS_BASE}/ws`;
 
 export const useGuardianSocket = () => {
   const [data, setData] = useState(null);
