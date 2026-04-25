@@ -2,6 +2,7 @@ try:
     import os
     import json
     import time
+    import signal
     import pandas as pd
     import numpy as np
     import redis
@@ -34,6 +35,17 @@ class TrafficEngine:
         self.redis_client = None
         self.provider = None
         self.provider_name = provider_name
+        self._shutting_down = False
+
+        # Handle SIGTERM from docker-compose gracefully
+        signal.signal(signal.SIGTERM, self._handle_signal)
+        signal.signal(signal.SIGINT, self._handle_signal)
+
+    def _handle_signal(self, signum, frame):
+        sig_name = signal.Signals(signum).name
+        print(f"\n[Engine] Received {sig_name}, shutting down gracefully...")
+        self._shutting_down = True
+        raise SystemExit(0)
     def initialize(self):
         """Connect to Redis and Load Model Provider"""
         # 1. Redis
@@ -111,8 +123,13 @@ class TrafficEngine:
                     
                 print(f"{color}IP: {source_meta:<35} | Pred: {pred_str:<8} | Type: {result.get('attack_type', ''):<10} | Conf: {p_attack:.4f} | Proto: {proto} | Dur: {dur_str}\033[0m")
 
+        except redis.ConnectionError:
+            if not self._shutting_down:
+                print("[Engine] Redis connection lost. Waiting for reconnect...")
+                self._shutting_down = True
         except Exception as e:
-            print(f"Error processing packet: {e}")
+            if not self._shutting_down:
+                print(f"Error processing packet: {e}")
 
     def run_simulation(self):
         

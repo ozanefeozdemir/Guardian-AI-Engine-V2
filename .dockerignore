@@ -20,3 +20,11 @@ backend/datasets
 
 # Ignore saved models if you only want to use the volume mounted ones
 # backend/saved_models
+
+# Large directories not needed in backend image
+frontend
+model
+.venv
+node_modules
+*.txt
+!requirements*.txt

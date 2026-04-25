@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { Shield, Lock, User, AlertCircle, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { API_BASE } from '../config';
 
 export default function Login({ setAuth }) {
   const [username, setUsername] = useState('');
@@ -17,7 +18,7 @@ export default function Login({ setAuth }) {
 
     try {
       // Backend'deki auth.py dosyamıza login isteği atıyoruz
-      const response = await axios.post('http://localhost:8000/api/auth/login', {
+      const response = await axios.post(`${API_BASE}/api/auth/login`, {
         username,
         password
       });
