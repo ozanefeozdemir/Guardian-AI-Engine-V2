@@ -92,12 +92,20 @@ class NFv3FlowTracker:
             return
 
         current_time = float(pkt.time)
-        pkt_len = len(pkt)
+        # Fix: NetFlow v3 measures L3 payload, so we use IP len instead of raw L2 frame size
+        pkt_len = pkt[IP].len if IP in pkt else len(pkt)
         ttl = pkt[IP].ttl if IP in pkt else 0
 
         # -- YENI AKIS --
         is_first_packet = False
         if direction == "new":
+            # Orphaned (Yarım) Akış Koruması
+            # Model datasetleri (CIC/UNSW) tam akışlardan oluşur. 
+            # Canlı ortamda dinlemeye ortadan başladığımızda gelen saf ACK/PSH paketleri 
+            # SYN barındırmadığı için, NIDS tarafından 0 süreli sahte Port Scan olarak algılanır.
+            if TCP in pkt and 'S' not in str(pkt[TCP].flags):
+                return
+                
             self.active_flows[flow_id] = self._create_flow(
                 pkt, current_time, pkt_len, ttl, meta
             )
@@ -387,18 +395,16 @@ class NFv3FlowTracker:
         flow = self.active_flows[flow_id]
 
         # Temel hesaplamalar
-        flow_duration_ms = max(
-            (flow['last_time'] - flow['start_time']) * 1000.0, 0.001
-        )
+        flow_duration_ms = (flow['last_time'] - flow['start_time']) * 1000.0
         flow_duration_sec = flow_duration_ms / 1000.0
 
-        # Fwd/Bwd sureeler (ms)
-        if flow['fwd_timestamps']:
+        # Fwd/Bwd sureler (ms)
+        if flow['fwd_timestamps'] and len(flow['fwd_timestamps']) > 1:
             duration_in = (flow['fwd_timestamps'][-1] - flow['fwd_timestamps'][0]) * 1000.0
         else:
             duration_in = 0.0
 
-        if flow['bwd_timestamps']:
+        if flow['bwd_timestamps'] and len(flow['bwd_timestamps']) > 1:
             duration_out = (flow['bwd_timestamps'][-1] - flow['bwd_timestamps'][0]) * 1000.0
         else:
             duration_out = 0.0
@@ -411,12 +417,19 @@ class NFv3FlowTracker:
         max_ip_pkt = longest_pkt
 
         # Throughput (bytes/second)
-        src_to_dst_bytes_per_sec = flow['in_bytes'] / flow_duration_sec if flow_duration_sec > 0 else 0
-        dst_to_src_bytes_per_sec = flow['out_bytes'] / flow_duration_sec if flow_duration_sec > 0 else 0
-
-        # Average throughput (bits/second)
-        src_to_dst_throughput = (flow['in_bytes'] * 8) / flow_duration_sec if flow_duration_sec > 0 else 0
-        dst_to_src_throughput = (flow['out_bytes'] * 8) / flow_duration_sec if flow_duration_sec > 0 else 0
+        if flow_duration_sec > 0:
+            src_to_dst_bytes_per_sec = flow['in_bytes'] / flow_duration_sec
+            dst_to_src_bytes_per_sec = flow['out_bytes'] / flow_duration_sec
+            
+            # Average throughput (bits/second)
+            src_to_dst_throughput = (flow['in_bytes'] * 8) / flow_duration_sec
+            dst_to_src_throughput = (flow['out_bytes'] * 8) / flow_duration_sec
+        else:  
+            # Fix: Avoid infinity explosion on single packet or ultra-fast flows
+            src_to_dst_bytes_per_sec = 0.0
+            dst_to_src_bytes_per_sec = 0.0
+            src_to_dst_throughput = 0.0
+            dst_to_src_throughput = 0.0
 
         # IAT istatistikleri
         s2d_iat_min, s2d_iat_max, s2d_iat_avg, s2d_iat_std = self._calc_iat_stats(flow['fwd_timestamps'])

@@ -545,15 +545,15 @@ class FlowGuardProvider(BaseModelProvider):
         src_port_buckets = self._bucket_port(features.get('L4_SRC_PORT', 0))
         dst_port_buckets = self._bucket_port(features.get('L4_DST_PORT', 0))
 
-        # Fix: We're zeroing out port bucket features to prevent the model from
-        # automatically classifying outbound traffic (from ephemeral ports) as an attack.
+        # Port bucket map: Eğitim setindeki gibi gerçek değerleri kullanıyoruz.
+        # Daha önce FP engellemek için sıfırlanmıştı ancak bu modelin başarısını düşürüyor.
         port_bucket_map = {
-            'SRC_PORT_WELL_KNOWN': 0.0,
-            'SRC_PORT_REGISTERED': 0.0,
-            'SRC_PORT_EPHEMERAL': 0.0,
-            'DST_PORT_WELL_KNOWN': 0.0,
-            'DST_PORT_REGISTERED': 0.0,
-            'DST_PORT_EPHEMERAL': 0.0,
+            'SRC_PORT_WELL_KNOWN': float(src_port_buckets['WELL_KNOWN']),
+            'SRC_PORT_REGISTERED': float(src_port_buckets['REGISTERED']),
+            'SRC_PORT_EPHEMERAL': float(src_port_buckets['EPHEMERAL']),
+            'DST_PORT_WELL_KNOWN': float(dst_port_buckets['WELL_KNOWN']),
+            'DST_PORT_REGISTERED': float(dst_port_buckets['REGISTERED']),
+            'DST_PORT_EPHEMERAL': float(dst_port_buckets['EPHEMERAL']),
         }
 
         for i, fname in enumerate(self.feature_names):
