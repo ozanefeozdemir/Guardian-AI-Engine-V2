@@ -15,6 +15,7 @@ try:
     from model_provider import get_model_provider
     from packet_flow import CICFlowTracker
     from nfv3_flow_tracker import NFv3FlowTracker
+    from ip_matcher import IPRuleMatcher
 except ImportError:
     print("Error: Missing required libraries. Please install them using 'pip install -r requirements.txt'")
     exit(1)
@@ -36,6 +37,7 @@ class TrafficEngine:
         self.redis_client = None
         self.provider = None
         self.provider_name = provider_name
+        self.matcher = None
         self._shutting_down = False
 
         # Handle SIGTERM from docker-compose gracefully
@@ -67,6 +69,13 @@ class TrafficEngine:
         info = self.provider.get_info()
         print(f"[Engine] Provider: {info['provider']} | Ready: {info['ready']}")
 
+        # 3. IP Rule Matcher (whitelist/blacklist short-circuit)
+        self.matcher = IPRuleMatcher(self.redis_client)
+        self.matcher.refresh()
+        print(f"[Engine] IP rule matcher loaded "
+              f"(whitelist: {len(self.matcher._whitelist)}, "
+              f"blacklist: {len(self.matcher._blacklist)})")
+
     def process_packet(self, features: dict, source_meta: str, ground_truth_label=None):
         """
         Core Logic: Raw Features -> Model Provider -> Redis Alert
@@ -78,20 +87,54 @@ class TrafficEngine:
                 for k, v in features.items()
             }
 
-            # 1. Predict via provider
+            # 1. IP rule short-circuit (skips ML inference for known-good/bad sources)
+            if self.matcher is not None:
+                self.matcher.maybe_refresh()
+                src_ip = source_meta.split("->")[0].strip()
+                verdict, rule_id = self.matcher.match(src_ip)
+
+                if verdict == "whitelist":
+                    alert = {
+                        "timestamp": time.time(),
+                        "source": source_meta,
+                        "is_attack": False,
+                        "confidence": 0.0,
+                        "attack_type": "Whitelisted",
+                        "rule_id": rule_id,
+                        "original_features": clean_features,
+                    }
+                    self.redis_client.rpush(ALERT_QUEUE, json.dumps(alert))
+                    print(f"\033[96m [WL] IP: {source_meta} | Rule: {rule_id} -> whitelisted\033[0m")
+                    return
+
+                if verdict == "blacklist":
+                    alert = {
+                        "timestamp": time.time(),
+                        "source": source_meta,
+                        "is_attack": True,
+                        "confidence": 1.0,
+                        "attack_type": "Blacklisted",
+                        "rule_id": rule_id,
+                        "original_features": clean_features,
+                    }
+                    self.redis_client.rpush(ALERT_QUEUE, json.dumps(alert))
+                    print(f"\033[95m [BL] IP: {source_meta} | Rule: {rule_id} -> blacklisted\033[0m")
+                    return
+
+            # 2. Predict via provider
             result = self.provider.predict(clean_features)
 
             is_attack = result["is_attack"]
             p_attack = result["confidence"]
 
-            # 2. Construct Result
-            
+            # 3. Construct Result
+
             alert = {
                 "timestamp": time.time(),
                 "source": source_meta,
                 "is_attack": is_attack,
                 "confidence": p_attack,
-                "attack_type": result.get("attack_type", "Malicious" if is_attack else "Benign"), 
+                "attack_type": result.get("attack_type", "Malicious" if is_attack else "Benign"),
                 "original_features": clean_features
             }
 

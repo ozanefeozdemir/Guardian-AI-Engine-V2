@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import init_db, get_db, AsyncSessionLocal
 from models import Alert, User, AuthLog
 from auth import router as auth_router
+from ip_rules import router as ip_rules_router, publish_rules_to_redis
 
 # --- Configuration ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -29,7 +30,15 @@ async def lifespan(app: FastAPI):
         print(f"Connected to Redis at {REDIS_URL}")
     except Exception as e:
         print(f"Warning: Redis connection failed: {e}")
-        
+
+    # Seed IP rules cache from DB so the engine sees current state on first poll.
+    try:
+        async with AsyncSessionLocal() as session:
+            await publish_rules_to_redis(session, app.state.redis)
+        print("Published IP rules to Redis cache.")
+    except Exception as e:
+        print(f"Warning: Failed to publish IP rules to Redis: {e}")
+
     # Start consumer task
     app.state.consumer_task = asyncio.create_task(redis_consumer())
         
@@ -43,6 +52,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Guardian AI Engine API", lifespan=lifespan)
 # --- Auth Rotalarını Bağlama ---
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(ip_rules_router, prefix="/api/ip-rules", tags=["IP Rules"])
 
 # --- CORS Ayarları Eklendi ---
 app.add_middleware(

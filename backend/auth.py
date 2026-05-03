@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from passlib.context import CryptContext
-from jose import jwt
+from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 import os
@@ -99,8 +100,12 @@ async def login_user(user_data: UserLogin, request: Request, db: AsyncSession = 
     await log_auth_action(db, user_data.username, client_ip, "Başarılı Giriş")
     
     # 4. Token (Yaka Kartı) Üret ve Ver
-    access_token = create_access_token(data={"sub": user.username, "role": user.role})
-    return {"access_token": access_token, "token_type": "bearer", "username": user.username, "role": user.role}
+    # NOTE: We intentionally store only `sub` in the JWT. The role/permissions are
+    # fetched from the DB on every request (see get_current_user) so that revocations
+    # and role changes take effect immediately without re-login.
+    access_token = create_access_token(data={"sub": user.username})
+    role_name = user.role.name if user.role else None
+    return {"access_token": access_token, "token_type": "bearer", "username": user.username, "role": role_name}
 
 @router.get("/logs")
 async def get_auth_logs(limit: int = 100, db: AsyncSession = Depends(get_db)):
@@ -109,3 +114,38 @@ async def get_auth_logs(limit: int = 100, db: AsyncSession = Depends(get_db)):
     result = await db.execute(stmt)
     logs = result.scalars().all()
     return logs
+
+
+# --- Auth Dependencies (RBAC) -------------------------------------------------
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=True)
+
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Decode the JWT, load the user (with role+permissions) from the DB."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Geçersiz token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Geçersiz token")
+
+    stmt = select(User).where(User.username == username)
+    user = (await db.execute(stmt)).scalars().first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="Kullanıcı bulunamadı veya devre dışı")
+    return user
+
+
+def require_permission(perm_name: str):
+    """Dependency factory: ensures the current user has `perm_name`."""
+    async def _check(user: User = Depends(get_current_user)) -> User:
+        perms = {p.name for p in (user.role.permissions if user.role else [])}
+        if perm_name not in perms:
+            raise HTTPException(status_code=403, detail=f"'{perm_name}' yetkisi gerekli")
+        return user
+    return _check

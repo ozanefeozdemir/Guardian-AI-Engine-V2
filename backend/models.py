@@ -55,7 +55,19 @@ class AuthLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     # Hatalı girişlerde (olmayan kullanıcı adıyla) patlamamak için String tutuyoruz:
-    username = Column(String, index=True, nullable=False) 
+    username = Column(String, index=True, nullable=False)
     ip_address = Column(String, nullable=False)
     action = Column(String, nullable=False) # Örn: "Başarılı Giriş", "Yanlış Şifre", "Kullanıcı Yok"
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+
+class IPRule(Base):
+    __tablename__ = "ip_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cidr = Column(String, nullable=False, index=True)        # "10.0.0.5/32" or "192.168.0.0/16"
+    list_type = Column(String, nullable=False, index=True)   # "whitelist" | "blacklist"
+    reason = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
