@@ -5,13 +5,25 @@ from passlib.context import CryptContext
 from jose import jwt
 from datetime import datetime, timedelta
 from pydantic import BaseModel
+import os
 
 from database import get_db
 from models import User, AuthLog
 
-# --- Güvenlik Ayarları ---
-SECRET_KEY = "guardian-super-secret-key-donot-share"  # JWT şifreleme anahtarımız
-ALGORITHM = "HS256"
+try:
+    SECRET_KEY = os.getenv("SECRET_KEY")  # JWT şifreleme anahtarımız
+    if not SECRET_KEY:
+        raise ValueError("SECRET_KEY environment variable is not set")
+except Exception as e:
+    raise ValueError("Invalid SECRET_KEY") from e
+
+try:
+    ALGORITHM = os.getenv("ALGORITHM")  # JWT algoritması
+    if not ALGORITHM:
+        raise ValueError("ALGORITHM environment variable is not set")
+except Exception as e:
+    raise ValueError("Invalid ALGORITHM") from e
+
 ACCESS_TOKEN_EXPIRE_MINUTES = 60  # Token 1 saat geçerli olacak
 
 # Şifre hashleme algoritması
