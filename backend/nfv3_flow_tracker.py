@@ -41,16 +41,19 @@ class NFv3FlowTracker:
     on_flow_ready callback'ini cagirir.
     """
 
-    def __init__(self, timeout=120.0, on_flow_ready=None):
+    def __init__(self, timeout=120.0, on_flow_ready=None, require_syn=True):
         """
         Args:
             timeout: Saniye cinsinden flow timeout suresi.
             on_flow_ready: Flow kapandiginda cagirilacak callback.
                            Signature: callback(features_dict, src_ip, dst_ip)
+            require_syn: TCP flows must start with SYN (default: True).
+                         Set False for testing/debugging orphaned flows.
         """
         self.active_flows = {}
         self.timeout = timeout
         self.on_flow_ready = on_flow_ready
+        self.require_syn = require_syn
         self._last_timeout_check = 0
 
     # ---------------------------------------------------------------
@@ -100,10 +103,10 @@ class NFv3FlowTracker:
         is_first_packet = False
         if direction == "new":
             # Orphaned (Yarım) Akış Koruması
-            # Model datasetleri (CIC/UNSW) tam akışlardan oluşur. 
-            # Canlı ortamda dinlemeye ortadan başladığımızda gelen saf ACK/PSH paketleri 
+            # Model datasetleri (CIC/UNSW) tam akışlardan oluşur.
+            # Canlı ortamda dinlemeye ortadan başladığımızda gelen saf ACK/PSH paketleri
             # SYN barındırmadığı için, NIDS tarafından 0 süreli sahte Port Scan olarak algılanır.
-            if TCP in pkt and 'S' not in str(pkt[TCP].flags):
+            if self.require_syn and TCP in pkt and 'S' not in str(pkt[TCP].flags):
                 return
                 
             self.active_flows[flow_id] = self._create_flow(
@@ -200,8 +203,8 @@ class NFv3FlowTracker:
                 if dns.ancount > 0 and dns.an:
                     flow['dns_ttl_answer'] = dns.an.ttl
 
-        # -- TIMEOUT KONTROLU (her 5 saniyede) --
-        if current_time - self._last_timeout_check > 5.0:
+        # -- TIMEOUT KONTROLU (her 1 saniyede) --
+        if current_time - self._last_timeout_check > 1.0:
             self._last_timeout_check = current_time
             self.check_timeouts(current_time)
 

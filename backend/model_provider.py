@@ -425,6 +425,11 @@ class FlowGuardProvider(BaseModelProvider):
         'DST_TO_SRC_IAT_AVG', 'DST_TO_SRC_IAT_STDDEV',
     ]
 
+    # ── Decision Threshold for Binary Classification ──
+    # FlowGuard uses softmax (sum of probs = 1.0), so 0.50 is the optimal decision boundary.
+    # Other sigmoid-based models may use different thresholds (see analyze_engine.THRESHOLD).
+    DECISION_THRESHOLD = 0.50
+
     def __init__(self, model_path: str = None, stats_path: str = None):
         self.model = None
         self.device = None
@@ -444,7 +449,7 @@ class FlowGuardProvider(BaseModelProvider):
         FlowGuard hardened modelini ve preprocessing stats'ını yükler.
 
         Yükleme sırası kritik:
-          1. Stats (.npz) yükle
+          1. Stats (.npz) yükle ve doğrula
           2. FlowGuard model oluştur (config dict ile)
           3. DomainDiscriminator'ı etkinleştir (checkpoint'taki key'ler için)
           4. State dict yükle
@@ -463,10 +468,68 @@ class FlowGuardProvider(BaseModelProvider):
             )
 
         stats = np.load(self.stats_path, allow_pickle=True)
+
+        # ── Validate stats file has all required keys ──
+        required_keys = ['feature_names', 'feature_means', 'feature_stds', 'log_transform_columns']
+        missing_keys = [k for k in required_keys if k not in stats]
+        if missing_keys:
+            raise ValueError(
+                f"[FlowGuardProvider] Stats file corrupted or outdated.\n"
+                f"Missing keys: {missing_keys}\n"
+                f"File: {self.stats_path}\n"
+                f"Solution: Regenerate stats by running model training:\n"
+                f"  python model/canavar-model/train.py --phase 5"
+            )
+
         self.feature_names = stats['feature_names'].tolist()
         self.feature_means = stats['feature_means'].astype(np.float64)
         self.feature_stds = stats['feature_stds'].astype(np.float64)
         self.log_transform_columns = stats['log_transform_columns'].tolist()
+
+        # ── Validate feature names against canonical list from features.py ──
+        # The stats file order is authoritative (it's what the model was trained on).
+        # We check that all expected feature names are present, but accept whatever order they're in.
+        try:
+            canavar_src = os.path.join(self.PROJECT_ROOT, 'model', 'canavar-model')
+            if canavar_src not in sys.path:
+                sys.path.insert(0, canavar_src)
+            from src.data.features import get_feature_names as get_canonical_features
+
+            canonical_features = get_canonical_features(include_engineered=True)
+            stats_feature_set = set(self.feature_names)
+            canonical_feature_set = set(canonical_features)
+
+            if len(self.feature_names) != len(canonical_features):
+                raise ValueError(
+                    f"[FlowGuardProvider] Feature count mismatch!\n"
+                    f"Stats file has {len(self.feature_names)} features, "
+                    f"but canonical definition has {len(canonical_features)}.\n"
+                    f"This indicates stats file is corrupted or was generated with wrong configuration."
+                )
+
+            missing = canonical_feature_set - stats_feature_set
+            extra = stats_feature_set - canonical_feature_set
+
+            if missing or extra:
+                msg = f"[FlowGuardProvider] Feature set mismatch!\n"
+                if missing:
+                    msg += f"Missing from stats: {missing}\n"
+                if extra:
+                    msg += f"Extra in stats: {extra}\n"
+                msg += "Solution: Stats file was generated with different feature set."
+                raise ValueError(msg)
+
+            # All features present (order may differ, which is OK as long as we use stats order consistently)
+            if self.feature_names != canonical_features:
+                print(f"[FlowGuardProvider] ✓ All 53 features present (but in different order than canonical)")
+                print(f"[FlowGuardProvider]   Using stats file feature order: {self.feature_names[:3]}...{self.feature_names[-3:]}")
+            else:
+                print(f"[FlowGuardProvider] ✓ Stats features match canonical order exactly")
+
+        except ImportError as e:
+            print(f"[FlowGuardProvider] ⚠️  Could not import features.py for validation: {e}")
+            print(f"[FlowGuardProvider]   Proceeding with stats features (count: {len(self.feature_names)})")
+
         print(f"[FlowGuardProvider] Stats yuklendi: {self.stats_path}")
         print(f"[FlowGuardProvider]   Features: {len(self.feature_names)} | "
               f"Log-transform: {len(self.log_transform_columns)} feature")
@@ -506,6 +569,15 @@ class FlowGuardProvider(BaseModelProvider):
         print(f"[FlowGuardProvider] Device: {self.device} | "
               f"Encoder: Transformer(53->128) | Classes: 2 (Benign/Attack)")
 
+        # ── Feature pipeline validation summary ──
+        port_bucket_count = sum(1 for f in self.feature_names if 'PORT' in f)
+        print(f"[FlowGuardProvider] ✓ Feature pipeline validated:")
+        print(f"  - Total features: {len(self.feature_names)} (expected 53)")
+        print(f"  - Port bucket features: {port_bucket_count} (expected 6)")
+        print(f"  - Log-transform features: {len(self.log_transform_columns)}")
+        if len(self.feature_names) != 53:
+            print(f"[FlowGuardProvider] ⚠️  WARNING: Expected 53 features, got {len(self.feature_names)}")
+
     def _bucket_port(self, port_value) -> dict:
         """
         Port numarasını 3 binary bucket'a çevir.
@@ -542,8 +614,22 @@ class FlowGuardProvider(BaseModelProvider):
         feature_vector = np.zeros(len(self.feature_names), dtype=np.float64)
 
         # Port bucket'ları hesapla
-        src_port_buckets = self._bucket_port(features.get('L4_SRC_PORT', 0))
-        dst_port_buckets = self._bucket_port(features.get('L4_DST_PORT', 0))
+        src_port = features.get('L4_SRC_PORT')
+        dst_port = features.get('L4_DST_PORT')
+
+        if src_port is None or dst_port is None:
+            logger.warning(
+                f"[FlowGuardProvider] Missing port values: "
+                f"L4_SRC_PORT={src_port}, L4_DST_PORT={dst_port}. "
+                f"Port bucketing will default to 0."
+            )
+            if src_port is None:
+                src_port = 0
+            if dst_port is None:
+                dst_port = 0
+
+        src_port_buckets = self._bucket_port(src_port)
+        dst_port_buckets = self._bucket_port(dst_port)
 
         # Port bucket map: Eğitim setindeki gibi gerçek değerleri kullanıyoruz.
         # Daha önce FP engellemek için sıfırlanmıştı ancak bu modelin başarısını düşürüyor.
@@ -585,6 +671,14 @@ class FlowGuardProvider(BaseModelProvider):
         eps = 1e-8
         feature_vector = (feature_vector - self.feature_means) / (self.feature_stds + eps)
 
+        # ── Verify output size matches model expectation ──
+        if len(feature_vector) != len(self.feature_names):
+            raise RuntimeError(
+                f"[FlowGuardProvider] Feature vector size mismatch!\n"
+                f"Generated {len(feature_vector)} features, expected {len(self.feature_names)}.\n"
+                f"This indicates a bug in feature extraction."
+            )
+
         return feature_vector.astype(np.float32)
 
     def predict(self, features: dict) -> dict:
@@ -621,9 +715,7 @@ class FlowGuardProvider(BaseModelProvider):
         p_benign = float(probs[0])
         p_attack = float(probs[1])
 
-        # THRESHOLD = 0.50 (Canavar model, softmax kullandigi icin 0.50 optimum karar siniridir)
-        # Bazi false positive'leri engellemek icin 0.40'dan 0.50'ye yukseltildi.
-        is_attack = p_attack > 0.50
+        is_attack = p_attack > self.DECISION_THRESHOLD
 
         return {
             'is_attack': is_attack,

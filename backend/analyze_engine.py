@@ -21,6 +21,7 @@ except ImportError:
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 ALERT_QUEUE = "alerts_queue"
+# Global threshold for sigmoid-based models. FlowGuardProvider uses softmax and overrides with its own DECISION_THRESHOLD = 0.50.
 THRESHOLD = 0.40 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,18 +72,19 @@ class TrafficEngine:
         Core Logic: Raw Features -> Model Provider -> Redis Alert
         """
         try:
+            # 0. Clean NaN/Inf from features BEFORE model prediction (defense-in-depth)
+            clean_features = {
+                k: (0.0 if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v)
+                for k, v in features.items()
+            }
+
             # 1. Predict via provider
-            result = self.provider.predict(features)
+            result = self.provider.predict(clean_features)
 
             is_attack = result["is_attack"]
             p_attack = result["confidence"]
 
             # 2. Construct Result
-            # Clean NaN/Inf from features for valid JSON
-            clean_features = {
-                k: (0.0 if isinstance(v, float) and (math.isnan(v) or math.isinf(v)) else v)
-                for k, v in features.items()
-            }
             
             alert = {
                 "timestamp": time.time(),
