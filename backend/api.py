@@ -89,6 +89,8 @@ async def redis_consumer():
                     
                     try:
                         alert_data = json.loads(data)
+
+                        # --- DB'ye kaydet ---
                         async with AsyncSessionLocal() as session:
                             new_alert = Alert(
                                 timestamp=alert_data.get("timestamp"),
@@ -100,18 +102,16 @@ async def redis_consumer():
                             )
                             session.add(new_alert)
                             await session.commit()
-                    except Exception as e:
-                        print(f"DB Save Error: {e}")
 
-                    try:
-                        alert_json = json.loads(data)
+                        # --- İstatistikleri güncelle (aynı parsed dict) ---
                         await redis_conn.incr("stats:total_packets")
-                        if alert_json.get("is_attack"):
+                        if alert_data.get("is_attack"):
                             await redis_conn.incr("stats:total_attacks")
-                            a_type = alert_json.get("attack_type", "Unknown")
+                            a_type = alert_data.get("attack_type", "Unknown")
                             await redis_conn.incr(f"stats:attack_type:{a_type}")
+
                     except Exception as e:
-                        print(f"Stats Error: {e}")
+                        print(f"Consumer Processing Error: {e}")
                 
                 await asyncio.sleep(0.001) 
                 

@@ -23,7 +23,7 @@ class User(Base):
     username = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    role = Column(String, default="admin") # Herkes giremesin diye default admin yapıyoruz
+    role = Column(String, default="viewer") # En düşük yetki seviyesi (least-privilege)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
