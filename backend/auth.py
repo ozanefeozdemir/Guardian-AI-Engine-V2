@@ -6,7 +6,10 @@ from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from pydantic import BaseModel
+from dotenv import load_dotenv
 import os
+
+load_dotenv()
 
 from database import get_db
 from models import User, AuthLog
@@ -106,6 +109,17 @@ async def login_user(user_data: UserLogin, request: Request, db: AsyncSession = 
     access_token = create_access_token(data={"sub": user.username})
     role_name = user.role.name if user.role else None
     return {"access_token": access_token, "token_type": "bearer", "username": user.username, "role": role_name}
+
+@router.delete("/{id}")
+async def delete_user(id: int, db: AsyncSession = Depends(get_db)):
+    stmt = select(User).where(User.id == id)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+    await db.delete(user)
+    await db.commit()
+    return {"message": "Kullanıcı başarıyla silindi!"}
 
 @router.get("/logs")
 async def get_auth_logs(limit: int = 100, db: AsyncSession = Depends(get_db)):
