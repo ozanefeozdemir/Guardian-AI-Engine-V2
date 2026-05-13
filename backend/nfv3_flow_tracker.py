@@ -1,347 +1,383 @@
-"""
-NF-v3 Flow Tracker
-==================
-Canli ag trafigindan flow-bazli feature extraction.
-NF-v3 (NetFlow) formatinda 53 feature uretir.
+"""NF-v3 flow exporter for live packet capture.
 
-FlowGuard modeli (canavar-model) bu feature'lari bekler.
-CICFlowTracker ile ayni mimariyi kullanir ama farkli feature seti uretir.
+Emits a raw NF-v3 row (dict) per closed flow, matching the column schema in
+src.data.features.NF_V3_RAW_FEATURES. FlowGuardProvider consumes the dict
+and runs canavar-model's training preprocess on it; no preprocessing happens
+here.
 
-Kullanim:
-    tracker = NFv3FlowTracker(timeout=120.0, on_flow_ready=callback)
-    sniff(prn=tracker.process_packet, store=False)
-
-Urettigi feature'lar (53 adet):
-    - PROTOCOL, L7_PROTO (protokol)
-    - IN_BYTES, IN_PKTS, OUT_BYTES, OUT_PKTS (hacim)
-    - TCP_FLAGS, CLIENT_TCP_FLAGS, SERVER_TCP_FLAGS (bayraklar)
-    - FLOW_DURATION_MILLISECONDS, DURATION_IN, DURATION_OUT (sure)
-    - MIN_TTL, MAX_TTL (TTL)
-    - LONGEST_FLOW_PKT, SHORTEST_FLOW_PKT, MIN_IP_PKT_LEN, MAX_IP_PKT_LEN
-    - SRC_TO_DST_SECOND_BYTES, DST_TO_SRC_SECOND_BYTES (oran)
-    - SRC_TO_DST_AVG_THROUGHPUT, DST_TO_SRC_AVG_THROUGHPUT
-    - RETRANSMITTED_IN_BYTES/PKTS, RETRANSMITTED_OUT_BYTES/PKTS
-    - NUM_PKTS_UP_TO_128_BYTES .. NUM_PKTS_1024_TO_1514_BYTES
-    - TCP_WIN_MAX_IN, TCP_WIN_MAX_OUT
-    - ICMP_TYPE, ICMP_IPV4_TYPE
-    - DNS_QUERY_ID, DNS_QUERY_TYPE, DNS_TTL_ANSWER
-    - FTP_COMMAND_RET_CODE
-    - SRC_TO_DST_IAT_* , DST_TO_SRC_IAT_* (8 IAT feature)
-    - 6 port bucket feature (SRC/DST WELL_KNOWN/REGISTERED/EPHEMERAL)
+Decisions encoded in this implementation:
+  * Identity/timestamp columns (IPV4_*, L4_*, FLOW_START/END_MILLISECONDS) are
+    populated even though preprocess drops them — keeps the live record
+    byte-comparable to a training CSV row.
+  * ICMP_TYPE follows the Sarhan NF-v3 spec: (type << 8) | code. Training
+    stats.mean=22777 confirms this is the dataset encoding. ICMP_IPV4_TYPE is
+    the bare type.
+  * Flow close: RST closes immediately. FIN waits for the peer FIN OR a
+    5 s FIN-grace, whichever comes first. nProbe-style — single-FIN closes in
+    the old tracker produced clipped CLIENT/SERVER_TCP_FLAGS distributions.
+  * Active timeout 120 s, inactive timeout 15 s — nProbe defaults.
+  * Retransmission tracks (seq, payload_len) tuples to avoid flagging MTU-
+    fragmented packets as retransmits.
+  * L7_PROTO is currently a port/protocol fallback. nDPI integration will
+    replace _guess_l7_proto when available.
 """
 
-from scapy.all import IP, TCP, UDP, ICMP, DNS, Raw
+from typing import Callable, Optional
 import numpy as np
+from scapy.all import IP, TCP, UDP, ICMP, DNS
+
+ACTIVE_TIMEOUT_DEFAULT = 120.0
+INACTIVE_TIMEOUT_DEFAULT = 15.0
+FIN_GRACE_DEFAULT = 5.0
 
 
-class NFv3FlowTracker:
+# Port → nDPI-numeric protocol mapping. Best-effort fallback; superseded by
+# real nDPI when the binding is enabled.
+_PORT_L7 = {
+    20: 1, 21: 1,          # FTP
+    22: 92,                # SSH
+    23: 23,                # Telnet
+    25: 3,                 # SMTP
+    53: 5,                 # DNS
+    67: 6, 68: 6,          # DHCP
+    69: 73,                # TFTP
+    80: 7, 8080: 7,        # HTTP
+    110: 4,                # POP3
+    119: 137,              # NNTP
+    123: 9,                # NTP
+    137: 11, 138: 11, 139: 11,  # NetBIOS
+    143: 9,                # IMAP (re-using #9 like nDPI uses NTP=NTP — see fallback below)
+    161: 10, 162: 10,      # SNMP
+    179: 65,               # BGP
+    194: 12,               # IRC
+    389: 84,               # LDAP
+    443: 91, 8443: 91,     # TLS/HTTPS
+    465: 3,                # SMTPS
+    514: 113,              # Syslog
+    520: 14,               # RIP
+    554: 13,               # RTSP
+    587: 3,                # Submission
+    631: 86,               # IPP
+    636: 84,               # LDAPS
+    993: 9,                # IMAPS
+    995: 4,                # POP3S
+    1080: 90,              # SOCKS
+    1194: 110,             # OpenVPN
+    1433: 18,              # MSSQL
+    1521: 117,             # Oracle SQL
+    1812: 36, 1813: 36,    # RADIUS
+    1883: 222,             # MQTT
+    1900: 138,             # SSDP
+    2049: 70,              # NFS
+    3306: 19,              # MySQL
+    3389: 88,              # RDP
+    3478: 41,              # STUN
+    4789: 224,             # VXLAN
+    5060: 100, 5061: 100,  # SIP
+    5222: 16, 5223: 16,    # XMPP
+    5353: 8,               # mDNS
+    5355: 30,              # LLMNR
+    5432: 17,              # PostgreSQL
+    5900: 87,              # VNC
+    6379: 224,             # Redis (placeholder — no canonical nDPI id)
+    27017: 226,            # MongoDB
+}
+
+
+def _guess_l7_proto(dst_port: int, src_port: int, protocol: int) -> int:
+    """Port + protocol heuristic for nDPI app_protocol code.
+
+    Real nDPI does payload-aware DPI; we approximate with port lookups plus
+    transport fallback. Distribution will be narrower than training, which is
+    why nDPI integration is the recommended follow-up.
     """
-    Paketleri 5-tuple bazli flow'lara gruplar ve NF-v3 formatinda
-    53 feature cikarir. Flow kapandiginda (FIN/RST veya timeout)
-    on_flow_ready callback'ini cagirir.
+    if dst_port in _PORT_L7:
+        return _PORT_L7[dst_port]
+    if src_port in _PORT_L7:
+        return _PORT_L7[src_port]
+    if protocol == 1:    # ICMP
+        return 81
+    if protocol == 2:    # IGMP
+        return 82
+    if protocol == 17:   # generic UDP
+        return 67
+    return 0             # Unknown
+
+
+class NFv3FlowExporter:
+    """Group live packets into 5-tuple flows and emit raw NF-v3 dicts.
+
+    Args:
+        on_flow_ready: callback(features_dict, src_ip, dst_ip)
+        active_timeout: max flow age in seconds (nProbe default 120).
+        inactive_timeout: idle gap that closes a flow (nProbe default 15).
+        fin_grace: seconds to wait after the first FIN before force-closing.
+        require_syn: drop TCP flows that don't begin with a SYN (live capture
+            into the middle of an existing flow). Default True — without this,
+            stray ACKs look like 0-duration port scans.
     """
 
-    def __init__(self, timeout=120.0, on_flow_ready=None, require_syn=True):
-        """
-        Args:
-            timeout: Saniye cinsinden flow timeout suresi.
-            on_flow_ready: Flow kapandiginda cagirilacak callback.
-                           Signature: callback(features_dict, src_ip, dst_ip)
-            require_syn: TCP flows must start with SYN (default: True).
-                         Set False for testing/debugging orphaned flows.
-        """
-        self.active_flows = {}
-        self.timeout = timeout
+    def __init__(
+        self,
+        on_flow_ready: Optional[Callable] = None,
+        active_timeout: float = ACTIVE_TIMEOUT_DEFAULT,
+        inactive_timeout: float = INACTIVE_TIMEOUT_DEFAULT,
+        fin_grace: float = FIN_GRACE_DEFAULT,
+        require_syn: bool = True,
+    ):
         self.on_flow_ready = on_flow_ready
+        self.active_timeout = active_timeout
+        self.inactive_timeout = inactive_timeout
+        self.fin_grace = fin_grace
         self.require_syn = require_syn
-        self._last_timeout_check = 0
+        self.active_flows: dict = {}
+        self._last_timeout_check = 0.0
 
     # ---------------------------------------------------------------
-    #  FLOW IDENTIFICATION
+    # Flow identification
     # ---------------------------------------------------------------
 
-    def get_flow_id(self, pkt):
-        """5-tuple bazli flow ID uret. Mevcut flow varsa yonunu belirle."""
+    def _flow_keys(self, pkt):
         if IP not in pkt or (TCP not in pkt and UDP not in pkt):
-            return None, None, None
-
+            return None
         src_ip, dst_ip, proto = pkt[IP].src, pkt[IP].dst, pkt[IP].proto
-        src_port = pkt[TCP].sport if TCP in pkt else pkt[UDP].sport
-        dst_port = pkt[TCP].dport if TCP in pkt else pkt[UDP].dport
-
-        fwd_key = f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{proto}"
-        bwd_key = f"{dst_ip}:{dst_port}-{src_ip}:{src_port}-{proto}"
-
-        if fwd_key in self.active_flows:
-            return fwd_key, "fwd", None
-        elif bwd_key in self.active_flows:
-            return bwd_key, "bwd", None
+        if TCP in pkt:
+            src_port, dst_port = pkt[TCP].sport, pkt[TCP].dport
         else:
-            meta = {
-                'src_ip': src_ip, 'dst_ip': dst_ip,
-                'src_port': src_port, 'dst_port': dst_port,
-                'protocol': proto,
-            }
-            return fwd_key, "new", meta
+            src_port, dst_port = pkt[UDP].sport, pkt[UDP].dport
+        fwd = (src_ip, src_port, dst_ip, dst_port, proto)
+        bwd = (dst_ip, dst_port, src_ip, src_port, proto)
+        return fwd, bwd, src_ip, dst_ip, src_port, dst_port, proto
 
     # ---------------------------------------------------------------
-    #  PACKET PROCESSING
+    # Packet handler
     # ---------------------------------------------------------------
 
     def process_packet(self, pkt):
-        """Ana giris noktasi. Her yakalanan paket buraya gelir."""
-        flow_id, direction, meta = self.get_flow_id(pkt)
-        if not flow_id:
+        keys = self._flow_keys(pkt)
+        if keys is None:
             return
+        fwd, bwd, src_ip, dst_ip, src_port, dst_port, proto = keys
 
         current_time = float(pkt.time)
-        # Fix: NetFlow v3 measures L3 payload, so we use IP len instead of raw L2 frame size
         pkt_len = pkt[IP].len if IP in pkt else len(pkt)
         ttl = pkt[IP].ttl if IP in pkt else 0
 
-        # -- YENI AKIS --
-        is_first_packet = False
-        if direction == "new":
-            # Orphaned (Yarım) Akış Koruması
-            # Model datasetleri (CIC/UNSW) tam akışlardan oluşur.
-            # Canlı ortamda dinlemeye ortadan başladığımızda gelen saf ACK/PSH paketleri
-            # SYN barındırmadığı için, NIDS tarafından 0 süreli sahte Port Scan olarak algılanır.
-            if self.require_syn and TCP in pkt and 'S' not in str(pkt[TCP].flags):
-                return
-                
-            self.active_flows[flow_id] = self._create_flow(
-                pkt, current_time, pkt_len, ttl, meta
-            )
+        if fwd in self.active_flows:
+            flow = self.active_flows[fwd]
             direction = "fwd"
-            is_first_packet = True
+        elif bwd in self.active_flows:
+            flow = self.active_flows[bwd]
+            direction = "bwd"
+        else:
+            if proto == 6:  # TCP
+                if self.require_syn and TCP in pkt and "S" not in str(pkt[TCP].flags):
+                    return
+            flow = self._create_flow(
+                pkt, current_time, pkt_len, ttl,
+                src_ip, dst_ip, src_port, dst_port, proto,
+            )
+            self.active_flows[fwd] = flow
+            direction = "fwd"
 
-        # -- MEVCUT AKISI GUNCELLE --
-        flow = self.active_flows[flow_id]
-        flow['last_time'] = current_time
+        self._update_flow(flow, pkt, direction, current_time, pkt_len, ttl)
 
-        if not is_first_packet:
-            # TTL (ilk paket _create_flow'da eklendi)
-            flow['ttl_values'].append(ttl)
-            
-            # Paket boyutu dagilimi (ilk paket _create_flow'da eklendi)
-            if pkt_len <= 128:
-                flow['pkts_up_to_128'] += 1
-            elif pkt_len <= 256:
-                flow['pkts_128_to_256'] += 1
-            elif pkt_len <= 512:
-                flow['pkts_256_to_512'] += 1
-            elif pkt_len <= 1024:
-                flow['pkts_512_to_1024'] += 1
-            else:
-                flow['pkts_1024_to_1514'] += 1
-
-            # Yon bazli metrikler
-            if direction == "fwd":
-                flow['in_bytes'] += pkt_len
-                flow['in_pkts'] += 1
-                flow['fwd_pkt_lengths'].append(pkt_len)
-                flow['fwd_timestamps'].append(current_time)
-            elif direction == "bwd":
-                flow['out_bytes'] += pkt_len
-                flow['out_pkts'] += 1
-                flow['bwd_pkt_lengths'].append(pkt_len)
-                flow['bwd_timestamps'].append(current_time)
-
-        if not is_first_packet:
-            if direction == "fwd":
-                if TCP in pkt:
-                    win = pkt[TCP].window
-                    if win > flow['tcp_win_max_in']:
-                        flow['tcp_win_max_in'] = win
-                    
-                    seq = pkt[TCP].seq
-                    if seq in flow['_fwd_seen_seqs']:
-                        flow['retransmitted_in_bytes'] += pkt_len
-                        flow['retransmitted_in_pkts'] += 1
-                    else:
-                        flow['_fwd_seen_seqs'].add(seq)
-            elif direction == "bwd":
-                if TCP in pkt:
-                    win = pkt[TCP].window
-                    if win > flow['tcp_win_max_out']:
-                        flow['tcp_win_max_out'] = win
-
-                    seq = pkt[TCP].seq
-                    if seq in flow['_bwd_seen_seqs']:
-                        flow['retransmitted_out_bytes'] += pkt_len
-                        flow['retransmitted_out_pkts'] += 1
-                    else:
-                        flow['_bwd_seen_seqs'].add(seq)
-
-        # -- TCP BAYRAKLARI --
-        if TCP in pkt:
-            flags_int = int(pkt[TCP].flags)
-            flow['tcp_flags_all'] |= flags_int
-            if direction == "fwd":
-                flow['client_tcp_flags'] |= flags_int
-            elif direction == "bwd":
-                flow['server_tcp_flags'] |= flags_int
-
-            # FIN veya RST -> flow'u kapat
-            flags = pkt[TCP].flags
-            if 'F' in flags or 'R' in flags:
-                return self._close_flow(flow_id)
-
-        # -- ICMP bilgileri --
-        if ICMP in pkt:
-            flow['icmp_type'] = pkt[ICMP].type
-            flow['icmp_code'] = pkt[ICMP].code
-
-        # -- DNS bilgileri --
-        if DNS in pkt and pkt.haslayer(DNS):
-            dns = pkt[DNS]
-            if dns.qr == 0:  # Query
-                flow['dns_query_id'] = dns.id
-                if dns.qdcount > 0 and dns.qd:
-                    flow['dns_query_type'] = dns.qd.qtype
-            elif dns.qr == 1:  # Response
-                if dns.ancount > 0 and dns.an:
-                    flow['dns_ttl_answer'] = dns.an.ttl
-
-        # -- TIMEOUT KONTROLU (her 1 saniyede) --
+        # Timeouts — checked once per second of capture time.
         if current_time - self._last_timeout_check > 1.0:
             self._last_timeout_check = current_time
-            self.check_timeouts(current_time)
+            self._sweep_timeouts(current_time)
 
-    # ---------------------------------------------------------------
-    #  FLOW CREATION
-    # ---------------------------------------------------------------
-
-    def _create_flow(self, pkt, current_time, pkt_len, ttl, meta):
-        """Yeni flow state dict'i olustur."""
-        flow = {
-            # Meta
-            'src_ip': meta['src_ip'],
-            'dst_ip': meta['dst_ip'],
-            'src_port': meta['src_port'],
-            'dst_port': meta['dst_port'],
-            'protocol': meta['protocol'],
-
-            # L7 Proto (basit tahmin: port bazli)
-            'l7_proto': self._guess_l7_proto(meta['dst_port'], meta['protocol']),
-
-            # Zaman
-            'start_time': current_time,
-            'last_time': current_time,
-
-            # Hacim (fwd = src->dst = IN, bwd = dst->src = OUT)
-            'in_bytes': pkt_len,
-            'in_pkts': 1,
-            'out_bytes': 0,
-            'out_pkts': 0,
-
-            # Paket boyutlari
-            'fwd_pkt_lengths': [pkt_len],
-            'bwd_pkt_lengths': [],
-            'fwd_timestamps': [current_time],
-            'bwd_timestamps': [],
-
-            # TTL
-            'ttl_values': [ttl],
-
-            # TCP bayraklari (bitwise OR)
-            'tcp_flags_all': 0,
-            'client_tcp_flags': 0,
-            'server_tcp_flags': 0,
-
-            # TCP Window
-            'tcp_win_max_in': pkt[TCP].window if TCP in pkt else 0,
-            'tcp_win_max_out': 0,
-
-            # Retransmission
-            'retransmitted_in_bytes': 0,
-            'retransmitted_in_pkts': 0,
-            'retransmitted_out_bytes': 0,
-            'retransmitted_out_pkts': 0,
-
-            # Retransmission tespiti icin gorulmus seq numaralari
-            '_fwd_seen_seqs': set(),
-            '_bwd_seen_seqs': set(),
-
-            # Paket boyutu dagilimi
-            'pkts_up_to_128': 1 if pkt_len <= 128 else 0,
-            'pkts_128_to_256': 1 if 128 < pkt_len <= 256 else 0,
-            'pkts_256_to_512': 1 if 256 < pkt_len <= 512 else 0,
-            'pkts_512_to_1024': 1 if 512 < pkt_len <= 1024 else 0,
-            'pkts_1024_to_1514': 1 if 1024 < pkt_len <= 1514 else 0,
-
-            # ICMP
-            'icmp_type': 0,
-            'icmp_code': 0,
-
-            # DNS
-            'dns_query_id': 0,
-            'dns_query_type': 0,
-            'dns_ttl_answer': 0,
-
-            # FTP
-            'ftp_command_ret_code': 0,
-        }
-
-        # Ilk paketin TCP bayraklarini kaydet
+        # TCP close conditions.
         if TCP in pkt:
-            flags_int = int(pkt[TCP].flags)
-            flow['tcp_flags_all'] = flags_int
-            flow['client_tcp_flags'] = flags_int
-            flow['_fwd_seen_seqs'].add(pkt[TCP].seq)
+            flags = pkt[TCP].flags
+            if "R" in flags:
+                self._close(fwd if direction == "fwd" else bwd)
+                return
+            if "F" in flags:
+                if direction == "fwd":
+                    flow["fwd_fin"] = True
+                else:
+                    flow["bwd_fin"] = True
+                if flow["fin_deadline"] is None:
+                    flow["fin_deadline"] = current_time + self.fin_grace
+                if flow["fwd_fin"] and flow["bwd_fin"]:
+                    self._close(fwd if direction == "fwd" else bwd)
+                    return
 
+    # ---------------------------------------------------------------
+    # Flow lifecycle
+    # ---------------------------------------------------------------
+
+    def _create_flow(self, pkt, t, pkt_len, ttl,
+                     src_ip, dst_ip, src_port, dst_port, proto):
+        flow = {
+            "src_ip": src_ip, "dst_ip": dst_ip,
+            "src_port": src_port, "dst_port": dst_port,
+            "protocol": proto,
+            "l7_proto": _guess_l7_proto(dst_port, src_port, proto),
+            "start_time": t,
+            "last_time": t,
+
+            "in_bytes": 0, "in_pkts": 0,
+            "out_bytes": 0, "out_pkts": 0,
+            "fwd_pkt_lengths": [],
+            "bwd_pkt_lengths": [],
+            "fwd_timestamps": [],
+            "bwd_timestamps": [],
+
+            "ttl_values": [],
+            "longest_pkt": 0,
+            "shortest_pkt": None,
+
+            "tcp_flags": 0,
+            "client_tcp_flags": 0,
+            "server_tcp_flags": 0,
+            "tcp_win_max_in": 0,
+            "tcp_win_max_out": 0,
+
+            "retransmitted_in_bytes": 0, "retransmitted_in_pkts": 0,
+            "retransmitted_out_bytes": 0, "retransmitted_out_pkts": 0,
+            "_fwd_seq_seen": set(),  # (seq, payload_len)
+            "_bwd_seq_seen": set(),
+
+            "pkts_up_to_128": 0,
+            "pkts_128_to_256": 0,
+            "pkts_256_to_512": 0,
+            "pkts_512_to_1024": 0,
+            "pkts_1024_to_1514": 0,
+
+            "icmp_type_combined": 0,  # (type << 8) | code
+            "icmp_ipv4_type": 0,
+
+            "dns_query_id": 0,
+            "dns_query_type": 0,
+            "dns_ttl_answer": 0,
+
+            "ftp_command_ret_code": 0,
+
+            "fwd_fin": False,
+            "bwd_fin": False,
+            "fin_deadline": None,
+        }
         return flow
 
+    def _update_flow(self, flow, pkt, direction, t, pkt_len, ttl):
+        flow["last_time"] = t
+        flow["ttl_values"].append(ttl)
+
+        if flow["shortest_pkt"] is None or pkt_len < flow["shortest_pkt"]:
+            flow["shortest_pkt"] = pkt_len
+        if pkt_len > flow["longest_pkt"]:
+            flow["longest_pkt"] = pkt_len
+
+        if pkt_len <= 128:
+            flow["pkts_up_to_128"] += 1
+        elif pkt_len <= 256:
+            flow["pkts_128_to_256"] += 1
+        elif pkt_len <= 512:
+            flow["pkts_256_to_512"] += 1
+        elif pkt_len <= 1024:
+            flow["pkts_512_to_1024"] += 1
+        elif pkt_len <= 1514:
+            flow["pkts_1024_to_1514"] += 1
+        # >1514 (jumbo) is intentionally not counted — no training bucket.
+
+        if direction == "fwd":
+            flow["in_bytes"] += pkt_len
+            flow["in_pkts"] += 1
+            flow["fwd_pkt_lengths"].append(pkt_len)
+            flow["fwd_timestamps"].append(t)
+        else:
+            flow["out_bytes"] += pkt_len
+            flow["out_pkts"] += 1
+            flow["bwd_pkt_lengths"].append(pkt_len)
+            flow["bwd_timestamps"].append(t)
+
+        if TCP in pkt:
+            flags_int = int(pkt[TCP].flags)
+            flow["tcp_flags"] |= flags_int
+            if direction == "fwd":
+                flow["client_tcp_flags"] |= flags_int
+                if pkt[TCP].window > flow["tcp_win_max_in"]:
+                    flow["tcp_win_max_in"] = pkt[TCP].window
+                key = (pkt[TCP].seq, len(pkt[TCP].payload))
+                if key in flow["_fwd_seq_seen"]:
+                    flow["retransmitted_in_bytes"] += pkt_len
+                    flow["retransmitted_in_pkts"] += 1
+                else:
+                    flow["_fwd_seq_seen"].add(key)
+            else:
+                flow["server_tcp_flags"] |= flags_int
+                if pkt[TCP].window > flow["tcp_win_max_out"]:
+                    flow["tcp_win_max_out"] = pkt[TCP].window
+                key = (pkt[TCP].seq, len(pkt[TCP].payload))
+                if key in flow["_bwd_seq_seen"]:
+                    flow["retransmitted_out_bytes"] += pkt_len
+                    flow["retransmitted_out_pkts"] += 1
+                else:
+                    flow["_bwd_seq_seen"].add(key)
+
+        if ICMP in pkt:
+            icmp_type = int(pkt[ICMP].type)
+            icmp_code = int(pkt[ICMP].code)
+            flow["icmp_type_combined"] = (icmp_type << 8) | icmp_code
+            flow["icmp_ipv4_type"] = icmp_type
+
+        if pkt.haslayer(DNS):
+            dns = pkt[DNS]
+            if dns.qr == 0:
+                flow["dns_query_id"] = int(dns.id)
+                if dns.qdcount > 0 and dns.qd is not None:
+                    try:
+                        flow["dns_query_type"] = int(dns.qd.qtype)
+                    except AttributeError:
+                        pass
+            else:
+                if dns.ancount > 0 and dns.an is not None:
+                    try:
+                        flow["dns_ttl_answer"] = int(dns.an.ttl)
+                    except AttributeError:
+                        pass
+
     # ---------------------------------------------------------------
-    #  TIMEOUT MANAGEMENT
+    # Timeouts
     # ---------------------------------------------------------------
 
-    def check_timeouts(self, current_time):
-        """Timeout'a ugramis flow'lari tespit edip kapat."""
-        expired = [
-            fid for fid, f in self.active_flows.items()
-            if (current_time - f['last_time']) > self.timeout
-        ]
-        for fid in expired:
-            self._close_flow(fid)
+    def _sweep_timeouts(self, now: float):
+        to_close = []
+        for key, flow in self.active_flows.items():
+            if now - flow["start_time"] > self.active_timeout:
+                to_close.append(key)
+                continue
+            if now - flow["last_time"] > self.inactive_timeout:
+                to_close.append(key)
+                continue
+            if flow["fin_deadline"] is not None and now > flow["fin_deadline"]:
+                to_close.append(key)
+        for k in to_close:
+            self._close(k)
 
-    # ---------------------------------------------------------------
-    #  FLOW CLOSING & FEATURE EXPORT
-    # ---------------------------------------------------------------
-
-    def _close_flow(self, flow_id):
-        """Flow'u kapat, feature'lari cikar ve callback'i cagir."""
-        if flow_id not in self.active_flows:
-            return None
-
-        features = self.extract_features(flow_id)
-        flow = self.active_flows.pop(flow_id)
-
-        if self.on_flow_ready:
-            self.on_flow_ready(features, flow['src_ip'], flow['dst_ip'])
-
-        return features
+    def _close(self, key):
+        flow = self.active_flows.pop(key, None)
+        if flow is None:
+            return
+        features = self._build_record(flow)
+        if self.on_flow_ready is not None:
+            self.on_flow_ready(features, flow["src_ip"], flow["dst_ip"])
 
     def flush_all(self):
-        """Tum aktif flow'lari zorla kapat (shutdown icin)."""
-        for fid in list(self.active_flows.keys()):
-            self._close_flow(fid)
+        for key in list(self.active_flows.keys()):
+            self._close(key)
 
     # ---------------------------------------------------------------
-    #  HELPERS
+    # Record construction (raw NF-v3 dict)
     # ---------------------------------------------------------------
 
     @staticmethod
-    def _calc_iat_stats(timestamps):
-        """Timestamp listesinden IAT istatistikleri hesapla.
-
-        Returns:
-            (iat_min, iat_max, iat_avg, iat_stddev) in milliseconds
-        """
+    def _iat_stats_ms(timestamps):
         if len(timestamps) < 2:
             return 0.0, 0.0, 0.0, 0.0
-
-        iats = np.diff(timestamps) * 1000.0  # saniye -> milisaniye
+        iats = np.diff(timestamps) * 1000.0
         return (
             float(np.min(iats)),
             float(np.max(iats)),
@@ -349,204 +385,86 @@ class NFv3FlowTracker:
             float(np.std(iats)),
         )
 
-    @staticmethod
-    def _guess_l7_proto(dst_port, protocol):
-        """Hedef porta ve protokole gore L7 proto tahmini.
+    def _build_record(self, flow) -> dict:
+        duration_ms = (flow["last_time"] - flow["start_time"]) * 1000.0
+        duration_sec = duration_ms / 1000.0
 
-        Basit best-effort haritalama. Gercek L7 DPI yapmiyor.
-        nDPI proto numaralari kullanilir.
-        """
-        port_map = {
-            80: 7,      # HTTP
-            443: 91,    # TLS/HTTPS
-            53: 5,      # DNS
-            22: 92,     # SSH
-            21: 1,      # FTP_CONTROL
-            20: 1,      # FTP_DATA
-            25: 3,      # SMTP
-            110: 4,     # POP3
-            143: 9,     # IMAP
-            23: 23,     # Telnet
-            3389: 88,   # RDP
-            8080: 7,    # HTTP alt
-            8443: 91,   # HTTPS alt
-        }
-        if dst_port in port_map:
-            return port_map[dst_port]
-        if protocol == 1:   # ICMP
-            return 81
-        if protocol == 17:  # UDP
-            return 67       # generic UDP
-        return 0  # Unknown
-
-    # ---------------------------------------------------------------
-    #  FEATURE EXTRACTION (53 NF-v3 features)
-    # ---------------------------------------------------------------
-
-    def extract_features(self, flow_id):
-        """
-        NF-v3 formatinda 53 feature uretir.
-
-        Feature sirasi model/canavar-model/src/data/features.py'deki
-        get_feature_names(include_engineered=True) ile birebir aynidir.
-
-        Returns:
-            dict: FlowGuardProvider.predict() icin hazir feature dict
-                  (L4_SRC_PORT ve L4_DST_PORT dahil, port bucketing
-                   provider tarafinda yapilir)
-        """
-        flow = self.active_flows[flow_id]
-
-        # Temel hesaplamalar
-        flow_duration_ms = (flow['last_time'] - flow['start_time']) * 1000.0
-        flow_duration_sec = flow_duration_ms / 1000.0
-
-        # Fwd/Bwd sureler (ms)
-        if flow['fwd_timestamps'] and len(flow['fwd_timestamps']) > 1:
-            duration_in = (flow['fwd_timestamps'][-1] - flow['fwd_timestamps'][0]) * 1000.0
+        if len(flow["fwd_timestamps"]) > 1:
+            duration_in_ms = (flow["fwd_timestamps"][-1] - flow["fwd_timestamps"][0]) * 1000.0
         else:
-            duration_in = 0.0
-
-        if flow['bwd_timestamps'] and len(flow['bwd_timestamps']) > 1:
-            duration_out = (flow['bwd_timestamps'][-1] - flow['bwd_timestamps'][0]) * 1000.0
+            duration_in_ms = 0.0
+        if len(flow["bwd_timestamps"]) > 1:
+            duration_out_ms = (flow["bwd_timestamps"][-1] - flow["bwd_timestamps"][0]) * 1000.0
         else:
-            duration_out = 0.0
+            duration_out_ms = 0.0
 
-        # Paket boyutu istatistikleri
-        all_pkt_lengths = flow['fwd_pkt_lengths'] + flow['bwd_pkt_lengths']
-        longest_pkt = max(all_pkt_lengths) if all_pkt_lengths else 0
-        shortest_pkt = min(all_pkt_lengths) if all_pkt_lengths else 0
-        min_ip_pkt = shortest_pkt
-        max_ip_pkt = longest_pkt
+        if duration_sec > 0:
+            s2d_bps = flow["in_bytes"] / duration_sec
+            d2s_bps = flow["out_bytes"] / duration_sec
+            s2d_thr = (flow["in_bytes"] * 8) / duration_sec
+            d2s_thr = (flow["out_bytes"] * 8) / duration_sec
+        else:
+            s2d_bps = d2s_bps = s2d_thr = d2s_thr = 0.0
 
-        # Throughput (bytes/second)
-        if flow_duration_sec > 0:
-            src_to_dst_bytes_per_sec = flow['in_bytes'] / flow_duration_sec
-            dst_to_src_bytes_per_sec = flow['out_bytes'] / flow_duration_sec
-            
-            # Average throughput (bits/second)
-            src_to_dst_throughput = (flow['in_bytes'] * 8) / flow_duration_sec
-            dst_to_src_throughput = (flow['out_bytes'] * 8) / flow_duration_sec
-        else:  
-            # Fix: Avoid infinity explosion on single packet or ultra-fast flows
-            src_to_dst_bytes_per_sec = 0.0
-            dst_to_src_bytes_per_sec = 0.0
-            src_to_dst_throughput = 0.0
-            dst_to_src_throughput = 0.0
+        s2d_iat = self._iat_stats_ms(flow["fwd_timestamps"])
+        d2s_iat = self._iat_stats_ms(flow["bwd_timestamps"])
 
-        # IAT istatistikleri
-        s2d_iat_min, s2d_iat_max, s2d_iat_avg, s2d_iat_std = self._calc_iat_stats(flow['fwd_timestamps'])
-        d2s_iat_min, d2s_iat_max, d2s_iat_avg, d2s_iat_std = self._calc_iat_stats(flow['bwd_timestamps'])
-
-        features = {
-            # --- Identity (port bucketing icin, model girdisi degil) ---
-            'L4_SRC_PORT': flow['src_port'],
-            'L4_DST_PORT': flow['dst_port'],
-
-            # --- 47 ham NF-v3 feature ---
-
-            # Protokol
-            'PROTOCOL': flow['protocol'],
-            'L7_PROTO': flow['l7_proto'],
-
-            # Hacim
-            'IN_BYTES': flow['in_bytes'],
-            'IN_PKTS': flow['in_pkts'],
-            'OUT_BYTES': flow['out_bytes'],
-            'OUT_PKTS': flow['out_pkts'],
-
-            # TCP bayraklari
-            'TCP_FLAGS': flow['tcp_flags_all'],
-            'CLIENT_TCP_FLAGS': flow['client_tcp_flags'],
-            'SERVER_TCP_FLAGS': flow['server_tcp_flags'],
-
-            # Sure
-            'FLOW_DURATION_MILLISECONDS': flow_duration_ms,
-            'DURATION_IN': duration_in,
-            'DURATION_OUT': duration_out,
-
-            # TTL
-            'MIN_TTL': min(flow['ttl_values']) if flow['ttl_values'] else 0,
-            'MAX_TTL': max(flow['ttl_values']) if flow['ttl_values'] else 0,
-
-            # Paket boyutlari
-            'LONGEST_FLOW_PKT': longest_pkt,
-            'SHORTEST_FLOW_PKT': shortest_pkt,
-            'MIN_IP_PKT_LEN': min_ip_pkt,
-            'MAX_IP_PKT_LEN': max_ip_pkt,
-
-            # Oran / throughput
-            'SRC_TO_DST_SECOND_BYTES': src_to_dst_bytes_per_sec,
-            'DST_TO_SRC_SECOND_BYTES': dst_to_src_bytes_per_sec,
-            'SRC_TO_DST_AVG_THROUGHPUT': src_to_dst_throughput,
-            'DST_TO_SRC_AVG_THROUGHPUT': dst_to_src_throughput,
-
-            # Retransmission
-            'RETRANSMITTED_IN_BYTES': flow['retransmitted_in_bytes'],
-            'RETRANSMITTED_IN_PKTS': flow['retransmitted_in_pkts'],
-            'RETRANSMITTED_OUT_BYTES': flow['retransmitted_out_bytes'],
-            'RETRANSMITTED_OUT_PKTS': flow['retransmitted_out_pkts'],
-
-            # Paket boyutu dagilimi
-            'NUM_PKTS_UP_TO_128_BYTES': flow['pkts_up_to_128'],
-            'NUM_PKTS_128_TO_256_BYTES': flow['pkts_128_to_256'],
-            'NUM_PKTS_256_TO_512_BYTES': flow['pkts_256_to_512'],
-            'NUM_PKTS_512_TO_1024_BYTES': flow['pkts_512_to_1024'],
-            'NUM_PKTS_1024_TO_1514_BYTES': flow['pkts_1024_to_1514'],
-
-            # TCP Window
-            'TCP_WIN_MAX_IN': flow['tcp_win_max_in'],
-            'TCP_WIN_MAX_OUT': flow['tcp_win_max_out'],
-
-            # ICMP
-            'ICMP_TYPE': flow['icmp_type'],
-            'ICMP_IPV4_TYPE': flow['icmp_code'],
-
-            # DNS
-            'DNS_QUERY_ID': flow['dns_query_id'],
-            'DNS_QUERY_TYPE': flow['dns_query_type'],
-            'DNS_TTL_ANSWER': flow['dns_ttl_answer'],
-
-            # FTP
-            'FTP_COMMAND_RET_CODE': flow['ftp_command_ret_code'],
-
-            # IAT (Inter-Arrival Time)
-            'SRC_TO_DST_IAT_MIN': s2d_iat_min,
-            'SRC_TO_DST_IAT_MAX': s2d_iat_max,
-            'SRC_TO_DST_IAT_AVG': s2d_iat_avg,
-            'SRC_TO_DST_IAT_STDDEV': s2d_iat_std,
-            'DST_TO_SRC_IAT_MIN': d2s_iat_min,
-            'DST_TO_SRC_IAT_MAX': d2s_iat_max,
-            'DST_TO_SRC_IAT_AVG': d2s_iat_avg,
-            'DST_TO_SRC_IAT_STDDEV': d2s_iat_std,
-
-            # Not: Port bucket feature'lari (6 adet) FlowGuardProvider._preprocess()
-            # tarafinda hesaplanir. Burada L4_SRC_PORT ve L4_DST_PORT olarak gonderiyoruz.
+        return {
+            "IPV4_SRC_ADDR": flow["src_ip"],
+            "L4_SRC_PORT": flow["src_port"],
+            "IPV4_DST_ADDR": flow["dst_ip"],
+            "L4_DST_PORT": flow["dst_port"],
+            "FLOW_START_MILLISECONDS": int(flow["start_time"] * 1000),
+            "FLOW_END_MILLISECONDS": int(flow["last_time"] * 1000),
+            "PROTOCOL": flow["protocol"],
+            "L7_PROTO": flow["l7_proto"],
+            "IN_BYTES": flow["in_bytes"],
+            "IN_PKTS": flow["in_pkts"],
+            "OUT_BYTES": flow["out_bytes"],
+            "OUT_PKTS": flow["out_pkts"],
+            "TCP_FLAGS": flow["tcp_flags"],
+            "CLIENT_TCP_FLAGS": flow["client_tcp_flags"],
+            "SERVER_TCP_FLAGS": flow["server_tcp_flags"],
+            "FLOW_DURATION_MILLISECONDS": duration_ms,
+            "DURATION_IN": duration_in_ms,
+            "DURATION_OUT": duration_out_ms,
+            "MIN_TTL": min(flow["ttl_values"]) if flow["ttl_values"] else 0,
+            "MAX_TTL": max(flow["ttl_values"]) if flow["ttl_values"] else 0,
+            "LONGEST_FLOW_PKT": flow["longest_pkt"],
+            "SHORTEST_FLOW_PKT": flow["shortest_pkt"] or 0,
+            "MIN_IP_PKT_LEN": flow["shortest_pkt"] or 0,
+            "MAX_IP_PKT_LEN": flow["longest_pkt"],
+            "SRC_TO_DST_SECOND_BYTES": s2d_bps,
+            "DST_TO_SRC_SECOND_BYTES": d2s_bps,
+            "RETRANSMITTED_IN_BYTES": flow["retransmitted_in_bytes"],
+            "RETRANSMITTED_IN_PKTS": flow["retransmitted_in_pkts"],
+            "RETRANSMITTED_OUT_BYTES": flow["retransmitted_out_bytes"],
+            "RETRANSMITTED_OUT_PKTS": flow["retransmitted_out_pkts"],
+            "SRC_TO_DST_AVG_THROUGHPUT": s2d_thr,
+            "DST_TO_SRC_AVG_THROUGHPUT": d2s_thr,
+            "NUM_PKTS_UP_TO_128_BYTES": flow["pkts_up_to_128"],
+            "NUM_PKTS_128_TO_256_BYTES": flow["pkts_128_to_256"],
+            "NUM_PKTS_256_TO_512_BYTES": flow["pkts_256_to_512"],
+            "NUM_PKTS_512_TO_1024_BYTES": flow["pkts_512_to_1024"],
+            "NUM_PKTS_1024_TO_1514_BYTES": flow["pkts_1024_to_1514"],
+            "TCP_WIN_MAX_IN": flow["tcp_win_max_in"],
+            "TCP_WIN_MAX_OUT": flow["tcp_win_max_out"],
+            "ICMP_TYPE": flow["icmp_type_combined"],
+            "ICMP_IPV4_TYPE": flow["icmp_ipv4_type"],
+            "DNS_QUERY_ID": flow["dns_query_id"],
+            "DNS_QUERY_TYPE": flow["dns_query_type"],
+            "DNS_TTL_ANSWER": flow["dns_ttl_answer"],
+            "FTP_COMMAND_RET_CODE": flow["ftp_command_ret_code"],
+            "SRC_TO_DST_IAT_MIN": s2d_iat[0],
+            "SRC_TO_DST_IAT_MAX": s2d_iat[1],
+            "SRC_TO_DST_IAT_AVG": s2d_iat[2],
+            "SRC_TO_DST_IAT_STDDEV": s2d_iat[3],
+            "DST_TO_SRC_IAT_MIN": d2s_iat[0],
+            "DST_TO_SRC_IAT_MAX": d2s_iat[1],
+            "DST_TO_SRC_IAT_AVG": d2s_iat[2],
+            "DST_TO_SRC_IAT_STDDEV": d2s_iat[3],
         }
 
-        return features
 
-
-if __name__ == "__main__":
-    from scapy.all import sniff
-    import json
-
-    tracker = NFv3FlowTracker(
-        timeout=120.0,
-        on_flow_ready=lambda feats, src, dst: print(
-            f"\n[FLOW] {src} -> {dst}\n"
-            f"  PROTOCOL={feats['PROTOCOL']} L7={feats['L7_PROTO']}\n"
-            f"  IN: {feats['IN_BYTES']}B / {feats['IN_PKTS']}pkts  "
-            f"OUT: {feats['OUT_BYTES']}B / {feats['OUT_PKTS']}pkts\n"
-            f"  Duration: {feats['FLOW_DURATION_MILLISECONDS']:.1f}ms  "
-            f"TTL: {feats['MIN_TTL']}-{feats['MAX_TTL']}\n"
-            f"  TCP Flags: {feats['TCP_FLAGS']}  "
-            f"Client: {feats['CLIENT_TCP_FLAGS']}  "
-            f"Server: {feats['SERVER_TCP_FLAGS']}\n"
-            f"  Features count: {len(feats)}"
-        )
-    )
-
-    print("Sniffing 200 packets (NF-v3 mode)...")
-    sniff(prn=tracker.process_packet, count=200)
-    tracker.flush_all()
+# Backwards-compatible alias for callers still importing the old name.
+NFv3FlowTracker = NFv3FlowExporter

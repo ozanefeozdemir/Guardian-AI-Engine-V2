@@ -32,7 +32,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from scapy.all import sniff, IP, TCP, UDP
-from nfv3_flow_tracker import NFv3FlowTracker
+from nfv3_flow_tracker import NFv3FlowExporter
 from packet_flow import CICFlowTracker
 from model_provider import get_model_provider
 
@@ -178,7 +178,7 @@ class LiveModelTester:
         tracker_name = "NF-v3" if use_nfv3 else "CIC-IDS"
 
         if use_nfv3:
-            tracker = NFv3FlowTracker(timeout=120.0, on_flow_ready=self.on_flow_ready)
+            tracker = NFv3FlowExporter(on_flow_ready=self.on_flow_ready)
         else:
             tracker = CICFlowTracker(timeout=120.0, on_flow_ready=self.on_flow_ready)
 

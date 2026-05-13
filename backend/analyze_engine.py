@@ -14,7 +14,7 @@ try:
     from feature_extractor import MAPPING
     from model_provider import get_model_provider
     from packet_flow import CICFlowTracker
-    from nfv3_flow_tracker import NFv3FlowTracker
+    from nfv3_flow_tracker import NFv3FlowExporter
     from ip_matcher import IPRuleMatcher
 except ImportError:
     print("Error: Missing required libraries. Please install them using 'pip install -r requirements.txt'")
@@ -231,7 +231,7 @@ class TrafficEngine:
             self.process_packet(features, f"{src_ip}->{dst_ip}")
 
         if use_nfv3:
-            tracker = NFv3FlowTracker(timeout=120.0, on_flow_ready=on_flow_ready)
+            tracker = NFv3FlowExporter(on_flow_ready=on_flow_ready)
         else:
             tracker = CICFlowTracker(timeout=120.0, on_flow_ready=on_flow_ready)
 
@@ -261,8 +261,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=['simulation', 'live'], default='simulation', help="Operation mode")
     parser.add_argument("--file", default=DEFAULT_DATASET, help="Path to CSV for simulation")
-    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom', 'guardian', 'flowguard'], default='legacy', 
-                        help="Model provider (default: reads MODEL_PROVIDER env var, fallback: legacy)")
+    parser.add_argument("--provider", choices=['placeholder', 'legacy', 'custom', 'guardian', 'flowguard'], default='flowguard',
+                        help="Model provider (default: flowguard — canavar-model). FlowGuard uses argmax; "
+                             "no threshold flag because canavar-model has no tunable threshold.")
     args = parser.parse_args()
     
     # file_path argümanını motorun içine gönderiyoruz:

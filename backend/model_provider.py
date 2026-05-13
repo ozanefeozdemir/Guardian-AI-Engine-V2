@@ -357,29 +357,26 @@ class CustomModelProvider(BaseModelProvider):
 
 class FlowGuardProvider(BaseModelProvider):
     """
-    FlowGuard Transformer-based NIDS Provider
-    ===========================================
-    model/canavar-model/ icindeki Phase 5 hardened FlowGuard modelini yukler.
-    53 NF-v3 (NetFlow) feature ile binary siniflandirma yapar: Benign (0) / Attack (1).
+    FlowGuard provider — model/canavar-model is the single source of truth.
 
-    Mimari:
-        FlowTransformerEncoder(53->128) + ClassificationHead(128->2) + DomainDiscriminator(128->4)
-        Her feature bir token olarak islenir, CLS token eklenir, 4-layer Transformer.
+    Preprocess is NOT reimplemented here. The provider imports the exact
+    helper functions from src.data.preprocess and calls them in the same
+    order as the training pipeline, so a feature dict produced live goes
+    through byte-identical math as a row from the training CSV.
 
-    Preprocessing Pipeline:
-        1. Raw feature dict -> 53 NF-v3 feature secimi
-        2. Port bucketing (SRC/DST port -> 6 binary bucket)
-        3. Log1p transform (heavy-tailed feature'lar)
-        4. Z-score normalizasyon (egitimden kaydedilen mean/std)
+    Decision rule mirrors canavar-model evaluation code: logits.argmax(dim=1).
+    No tunable threshold — softmax probability is reported only for UI/logging.
 
-    Checkpoint: backend/saved_models/hardened_model.pt
-    Stats:      backend/saved_models/flowguard_stats.npz
+    Inputs (raw_features dict): all NF-v3 columns as they appear in the
+    training CSV (IPV4_*, L4_*, FLOW_START_MILLISECONDS, FLOW_END_MILLISECONDS
+    included; preprocess will drop them). Missing columns are filled with 0
+    to match the inference-mode path in preprocess.preprocess_dataset.
 
-    Kullanım:
-        python analyze_engine.py --mode live --provider flowguard
+    Files:
+      - backend/saved_models/hardened_model.pt
+      - backend/saved_models/flowguard_stats.npz
     """
 
-    # ── Model Hyperparameters ──
     ENCODER_CONFIG = {
         'model': {
             'encoder': {
@@ -396,330 +393,125 @@ class FlowGuardProvider(BaseModelProvider):
             },
         }
     }
-    NUM_DOMAINS = 4  # 4 dataset ile eğitildi (unsw, bot, ton, cic)
+    NUM_DOMAINS = 4  # unsw, bot, ton, cic
 
-    # ── Dosya Yolları ──
-    PROJECT_ROOT = os.path.dirname(BASE_DIR)  # backend/ → proje kökü
+    PROJECT_ROOT = os.path.dirname(BASE_DIR)
+    CANAVAR_SRC = os.path.join(PROJECT_ROOT, 'model', 'canavar-model')
     DEFAULT_MODEL_PATH = os.path.join(BASE_DIR, "saved_models", "hardened_model.pt")
     DEFAULT_STATS_PATH = os.path.join(BASE_DIR, "saved_models", "flowguard_stats.npz")
-
-    # ── Port Bucket Sınırları ──
-    _PORT_BUCKETS = {
-        'WELL_KNOWN': (0, 1023),
-        'REGISTERED': (1024, 49151),
-        'EPHEMERAL': (49152, 65535),
-    }
-
-    # ── Log Transform Uygulanacak Feature'lar ──
-    _LOG_TRANSFORM_CANDIDATES = [
-        'IN_BYTES', 'OUT_BYTES', 'IN_PKTS', 'OUT_PKTS',
-        'FLOW_DURATION_MILLISECONDS', 'DURATION_IN', 'DURATION_OUT',
-        'SRC_TO_DST_SECOND_BYTES', 'DST_TO_SRC_SECOND_BYTES',
-        'RETRANSMITTED_IN_BYTES', 'RETRANSMITTED_IN_PKTS',
-        'RETRANSMITTED_OUT_BYTES', 'RETRANSMITTED_OUT_PKTS',
-        'SRC_TO_DST_AVG_THROUGHPUT', 'DST_TO_SRC_AVG_THROUGHPUT',
-        'DNS_TTL_ANSWER',
-        'SRC_TO_DST_IAT_MIN', 'SRC_TO_DST_IAT_MAX',
-        'SRC_TO_DST_IAT_AVG', 'SRC_TO_DST_IAT_STDDEV',
-        'DST_TO_SRC_IAT_MIN', 'DST_TO_SRC_IAT_MAX',
-        'DST_TO_SRC_IAT_AVG', 'DST_TO_SRC_IAT_STDDEV',
-    ]
-
-    # ── Decision Threshold for Binary Classification ──
-    # FlowGuard uses softmax (sum of probs = 1.0), so 0.50 is the optimal decision boundary.
-    # Other sigmoid-based models may use different thresholds (see analyze_engine.THRESHOLD).
-    DECISION_THRESHOLD = 0.50
 
     def __init__(self, model_path: str = None, stats_path: str = None):
         self.model = None
         self.device = None
+        self.stats = None  # PreprocessingStats instance from canavar-model
         self._ready = False
-
         self.model_path = model_path or self.DEFAULT_MODEL_PATH
         self.stats_path = stats_path or self.DEFAULT_STATS_PATH
 
-        # Preprocessing stats (eğitimden yüklenir)
-        self.feature_names = None   # 53 feature sırası
-        self.feature_means = None   # Z-score mean
-        self.feature_stds = None    # Z-score std
-        self.log_transform_columns = None  # Hangi feature'lara log1p uygulandı
+    def _ensure_canavar_on_path(self):
+        if self.CANAVAR_SRC not in sys.path:
+            sys.path.insert(0, self.CANAVAR_SRC)
 
     def load(self) -> None:
-        """
-        FlowGuard hardened modelini ve preprocessing stats'ını yükler.
-
-        Yükleme sırası kritik:
-          1. Stats (.npz) yükle ve doğrula
-          2. FlowGuard model oluştur (config dict ile)
-          3. DomainDiscriminator'ı etkinleştir (checkpoint'taki key'ler için)
-          4. State dict yükle
-          5. Eval moduna al
-        """
         import torch
-        import numpy as np
-        import json
 
-        # ── 1. Preprocessing Stats ──
         if not os.path.exists(self.stats_path):
             raise FileNotFoundError(
-                f"FlowGuard stats dosyası bulunamadı: {self.stats_path}\n"
-                "Bu dosya model eğitimi sırasında üretilir.\n"
-                "Kaynak: model/canavar-model/data/processed/<dataset>_stats.npz"
+                f"FlowGuard stats not found: {self.stats_path}\n"
+                "Source: model/canavar-model/data/processed/<dataset>_stats.npz"
             )
-
-        stats = np.load(self.stats_path, allow_pickle=True)
-
-        # ── Validate stats file has all required keys ──
-        required_keys = ['feature_names', 'feature_means', 'feature_stds', 'log_transform_columns']
-        missing_keys = [k for k in required_keys if k not in stats]
-        if missing_keys:
-            raise ValueError(
-                f"[FlowGuardProvider] Stats file corrupted or outdated.\n"
-                f"Missing keys: {missing_keys}\n"
-                f"File: {self.stats_path}\n"
-                f"Solution: Regenerate stats by running model training:\n"
-                f"  python model/canavar-model/train.py --phase 5"
-            )
-
-        self.feature_names = stats['feature_names'].tolist()
-        self.feature_means = stats['feature_means'].astype(np.float64)
-        self.feature_stds = stats['feature_stds'].astype(np.float64)
-        self.log_transform_columns = stats['log_transform_columns'].tolist()
-
-        # ── Validate feature names against canonical list from features.py ──
-        # The stats file order is authoritative (it's what the model was trained on).
-        # We check that all expected feature names are present, but accept whatever order they're in.
-        try:
-            canavar_src = os.path.join(self.PROJECT_ROOT, 'model', 'canavar-model')
-            if canavar_src not in sys.path:
-                sys.path.insert(0, canavar_src)
-            from src.data.features import get_feature_names as get_canonical_features
-
-            canonical_features = get_canonical_features(include_engineered=True)
-            stats_feature_set = set(self.feature_names)
-            canonical_feature_set = set(canonical_features)
-
-            if len(self.feature_names) != len(canonical_features):
-                raise ValueError(
-                    f"[FlowGuardProvider] Feature count mismatch!\n"
-                    f"Stats file has {len(self.feature_names)} features, "
-                    f"but canonical definition has {len(canonical_features)}.\n"
-                    f"This indicates stats file is corrupted or was generated with wrong configuration."
-                )
-
-            missing = canonical_feature_set - stats_feature_set
-            extra = stats_feature_set - canonical_feature_set
-
-            if missing or extra:
-                msg = f"[FlowGuardProvider] Feature set mismatch!\n"
-                if missing:
-                    msg += f"Missing from stats: {missing}\n"
-                if extra:
-                    msg += f"Extra in stats: {extra}\n"
-                msg += "Solution: Stats file was generated with different feature set."
-                raise ValueError(msg)
-
-            # All features present (order may differ, which is OK as long as we use stats order consistently)
-            if self.feature_names != canonical_features:
-                print(f"[FlowGuardProvider] ✓ All 53 features present (but in different order than canonical)")
-                print(f"[FlowGuardProvider]   Using stats file feature order: {self.feature_names[:3]}...{self.feature_names[-3:]}")
-            else:
-                print(f"[FlowGuardProvider] ✓ Stats features match canonical order exactly")
-
-        except ImportError as e:
-            print(f"[FlowGuardProvider] ⚠️  Could not import features.py for validation: {e}")
-            print(f"[FlowGuardProvider]   Proceeding with stats features (count: {len(self.feature_names)})")
-
-        print(f"[FlowGuardProvider] Stats yuklendi: {self.stats_path}")
-        print(f"[FlowGuardProvider]   Features: {len(self.feature_names)} | "
-              f"Log-transform: {len(self.log_transform_columns)} feature")
-
-        # ── 2. Model ──
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(
-                f"FlowGuard model dosyası bulunamadı: {self.model_path}\n"
-                "Bu dosya Phase 5 hardening sonrası üretilir.\n"
-                "Kaynak: model/canavar-model/checkpoints/phase5/hardened_model.pt"
+                f"FlowGuard checkpoint not found: {self.model_path}\n"
+                "Source: model/canavar-model/checkpoints/phase5/hardened_model.pt"
             )
 
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-        # FlowGuard sınıfını import et
-        canavar_src = os.path.join(self.PROJECT_ROOT, 'model', 'canavar-model')
-        if canavar_src not in sys.path:
-            sys.path.insert(0, canavar_src)
+        self._ensure_canavar_on_path()
+        from src.data.preprocess import PreprocessingStats
         from src.models.flowguard import FlowGuard
 
-        # ── 3. Model oluştur + DomainDiscriminator etkinleştir ──
+        self.stats = PreprocessingStats.load(self.stats_path)
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = FlowGuard(self.ENCODER_CONFIG)
-
-        # KRİTİK: hardened_model.pt checkpoint'u DomainDiscriminator
-        # katmanlarını da içerir. Bu çağrı yapılmazsa load_state_dict
-        # "Unexpected key(s): domain_disc.*" hatası verir.
+        # hardened_model.pt includes DomainDiscriminator keys
         self.model.enable_domain_discriminator(num_domains=self.NUM_DOMAINS)
-
-        # ── 4. State dict yükle ──
         state_dict = torch.load(self.model_path, map_location=self.device, weights_only=True)
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
         self.model.eval()
 
         self._ready = True
-        print(f"[FlowGuardProvider] Model yuklendi: {self.model_path}")
-        print(f"[FlowGuardProvider] Device: {self.device} | "
-              f"Encoder: Transformer(53->128) | Classes: 2 (Benign/Attack)")
+        print(f"[FlowGuardProvider] Loaded model={self.model_path} | "
+              f"device={self.device} | features={len(self.stats.feature_names)} | "
+              f"log_transform={len(self.stats.log_transform_columns)}")
 
-        # ── Feature pipeline validation summary ──
-        port_bucket_count = sum(1 for f in self.feature_names if 'PORT' in f)
-        print(f"[FlowGuardProvider] ✓ Feature pipeline validated:")
-        print(f"  - Total features: {len(self.feature_names)} (expected 53)")
-        print(f"  - Port bucket features: {port_bucket_count} (expected 6)")
-        print(f"  - Log-transform features: {len(self.log_transform_columns)}")
-        if len(self.feature_names) != 53:
-            print(f"[FlowGuardProvider] ⚠️  WARNING: Expected 53 features, got {len(self.feature_names)}")
+    def _build_vector(self, raw_features: dict):
+        """Apply canavar-model preprocess in the exact training order.
 
-    def _bucket_port(self, port_value) -> dict:
-        """
-        Port numarasını 3 binary bucket'a çevir.
-
-        Args:
-            port_value: Port numarası (int/float/str)
-
-        Returns:
-            dict: {'WELL_KNOWN': 0/1, 'REGISTERED': 0/1, 'EPHEMERAL': 0/1}
-        """
-        try:
-            port = int(float(port_value))
-        except (ValueError, TypeError):
-            port = 0
-
-        result = {}
-        for bucket_name, (lo, hi) in self._PORT_BUCKETS.items():
-            result[bucket_name] = 1 if lo <= port <= hi else 0
-        return result
-
-    def _preprocess(self, features: dict):
-        """
-        Raw NF-v3 feature dict → normalized (1, 53) numpy array.
-
-        Pipeline (eğitimle aynı sıra):
-          1. 47 ham NF-v3 feature'ı seç
-          2. Port bucketing → 6 ek feature ekle
-          3. log1p(|x|) transform (heavy-tailed feature'lar)
-          4. Z-score normalize (mean/std)
+        Single code path with training: same _bucket_ports, _handle_inf_and_nan,
+        _log_transform, _zscore_normalize functions are invoked.
         """
         import numpy as np
+        import pandas as pd
+        self._ensure_canavar_on_path()
+        from src.data.preprocess import (
+            _bucket_ports,
+            _handle_inf_and_nan,
+            _log_transform,
+            _zscore_normalize,
+            _IDENTITY_COLUMNS,
+            _TIMESTAMP_COLUMNS,
+        )
 
-        # ── 1. Feature vektörü oluştur (feature_names sırasına göre) ──
-        feature_vector = np.zeros(len(self.feature_names), dtype=np.float64)
+        df = pd.DataFrame([raw_features])
+        df.columns = df.columns.str.strip()
 
-        # Port bucket'ları hesapla
-        src_port = features.get('L4_SRC_PORT')
-        dst_port = features.get('L4_DST_PORT')
+        if 'L4_SRC_PORT' in df.columns:
+            df = pd.concat([df, _bucket_ports(df['L4_SRC_PORT'], 'SRC_PORT')], axis=1)
+        if 'L4_DST_PORT' in df.columns:
+            df = pd.concat([df, _bucket_ports(df['L4_DST_PORT'], 'DST_PORT')], axis=1)
 
-        if src_port is None or dst_port is None:
-            logger.warning(
-                f"[FlowGuardProvider] Missing port values: "
-                f"L4_SRC_PORT={src_port}, L4_DST_PORT={dst_port}. "
-                f"Port bucketing will default to 0."
-            )
-            if src_port is None:
-                src_port = 0
-            if dst_port is None:
-                dst_port = 0
+        cols_to_drop = [c for c in _IDENTITY_COLUMNS + _TIMESTAMP_COLUMNS if c in df.columns]
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
 
-        src_port_buckets = self._bucket_port(src_port)
-        dst_port_buckets = self._bucket_port(dst_port)
+        df = _handle_inf_and_nan(df)
 
-        # Port bucket map: Eğitim setindeki gibi gerçek değerleri kullanıyoruz.
-        # Daha önce FP engellemek için sıfırlanmıştı ancak bu modelin başarısını düşürüyor.
-        port_bucket_map = {
-            'SRC_PORT_WELL_KNOWN': float(src_port_buckets['WELL_KNOWN']),
-            'SRC_PORT_REGISTERED': float(src_port_buckets['REGISTERED']),
-            'SRC_PORT_EPHEMERAL': float(src_port_buckets['EPHEMERAL']),
-            'DST_PORT_WELL_KNOWN': float(dst_port_buckets['WELL_KNOWN']),
-            'DST_PORT_REGISTERED': float(dst_port_buckets['REGISTERED']),
-            'DST_PORT_EPHEMERAL': float(dst_port_buckets['EPHEMERAL']),
-        }
+        # Inference-mode alignment: ensure every training feature column exists.
+        feature_cols = self.stats.feature_names
+        for col in feature_cols:
+            if col not in df.columns:
+                df[col] = 0.0
 
-        for i, fname in enumerate(self.feature_names):
-            # Port bucket feature'ları
-            if fname in port_bucket_map:
-                feature_vector[i] = port_bucket_map[fname]
-                continue
+        _log_transform(df, self.stats.log_transform_columns)
+        df, _, _ = _zscore_normalize(
+            df,
+            feature_cols,
+            means=self.stats.feature_means,
+            stds=self.stats.feature_stds,
+        )
 
-            # Ham NF-v3 feature'ları
-            raw_val = features.get(fname, 0.0)
-            try:
-                val = float(raw_val)
-            except (ValueError, TypeError):
-                val = 0.0
-
-            # Inf/NaN temizle
-            if np.isinf(val) or np.isnan(val):
-                val = 0.0
-
-            feature_vector[i] = val
-
-        # ── 2. Log1p transform (eğitimle aynı feature'lar) ──
-        for col_name in self.log_transform_columns:
-            if col_name in self.feature_names:
-                idx = self.feature_names.index(col_name)
-                feature_vector[idx] = np.log1p(np.abs(feature_vector[idx]))
-
-        # ── 3. Z-score normalize ──
-        eps = 1e-8
-        feature_vector = (feature_vector - self.feature_means) / (self.feature_stds + eps)
-
-        # ── Verify output size matches model expectation ──
-        if len(feature_vector) != len(self.feature_names):
-            raise RuntimeError(
-                f"[FlowGuardProvider] Feature vector size mismatch!\n"
-                f"Generated {len(feature_vector)} features, expected {len(self.feature_names)}.\n"
-                f"This indicates a bug in feature extraction."
-            )
-
-        return feature_vector.astype(np.float32)
+        return df[feature_cols].values.astype(np.float32)
 
     def predict(self, features: dict) -> dict:
-        """
-        NF-v3 feature dict alıp binary tahmin yapar.
-
-        Args:
-            features: NF-v3 formatında feature dict
-                      (L4_SRC_PORT, PROTOCOL, IN_BYTES, vb.)
-
-        Returns:
-            dict:
-                - "is_attack": bool
-                - "confidence": float (0.0-1.0, saldırı olasılığı)
-                - "attack_type": "Benign" | "Malicious"
-        """
         import torch
-        import numpy as np
-
         if not self._ready:
-            raise RuntimeError("Model yüklenmedi. Önce load() çağırın.")
+            raise RuntimeError("Model not loaded. Call load() first.")
 
-        # 1. Preprocess
-        vec = self._preprocess(features)
+        vec = self._build_vector(features)  # (1, 53)
+        tensor = torch.from_numpy(vec).to(self.device)
 
-        # 2. Tensor oluştur (1, 53)
-        tensor = torch.from_numpy(vec).unsqueeze(0).to(self.device)
-
-        # 3. Model inference
         with torch.no_grad():
-            logits = self.model(tensor)  # (1, 2)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]  # [p_benign, p_attack]
+            logits = self.model(tensor)
+            # canavar-model decision rule: argmax over class logits.
+            pred = int(logits.argmax(dim=1).item())
+            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
 
-        p_benign = float(probs[0])
-        p_attack = float(probs[1])
-
-        is_attack = p_attack > self.DECISION_THRESHOLD
-
+        is_attack = pred == 1
         return {
             'is_attack': is_attack,
-            'confidence': p_attack,
+            'confidence': float(probs[1]),  # p_attack — UI only, not the decision
             'attack_type': 'Malicious' if is_attack else 'Benign',
         }
 
@@ -727,13 +519,12 @@ class FlowGuardProvider(BaseModelProvider):
         return self._ready
 
     def get_info(self) -> dict:
-        """Provider hakkında detaylı bilgi."""
         info = super().get_info()
         info.update({
             'model': 'FlowGuard Phase 5 (Hardened)',
             'architecture': 'TransformerEncoder(53->128) + ClassificationHead(128->2)',
             'features': '53 NF-v3 features',
-            'classification': 'Binary (Benign/Attack)',
+            'classification': 'Binary (Benign/Attack), argmax decision',
             'checkpoint': self.model_path,
         })
         return info
