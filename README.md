@@ -1,4 +1,4 @@
-# 🛡️ Guardian AI Engine V2 - Advanced Cybersecurity AI System
+#  Guardian AI Engine V2 - Advanced Cybersecurity AI System
 
 **Guardian AI Engine V2** is a real-time, machine learning-based, adaptive Intrusion Detection System (IDS).
 
@@ -6,11 +6,11 @@ This system utilizes a **Random Forest** model trained on **CIC-IDS 2017/2018** 
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 The project employs a **Microservices** architecture for performance and scalability:
 
-1.  **🧠 Analysis Engine (The Worker):**
+1.  ** Analysis Engine (The Worker):**
     *   Listens to live traffic or reads simulation files.
     *   Analyzes every packet using the AI model.
     *   Uses the first 5% of incoming data to retrain and adapt itself to the specific day's attack patterns (Adaptation).
@@ -25,7 +25,7 @@ The project employs a **Microservices** architecture for performance and scalabi
 
 ---
 
-## 🚀 Installation & Usage
+## Installation & Usage
 
 ### Method 1: Docker (Recommended)
 
@@ -73,7 +73,7 @@ For development purposes, you can run services individually.
 
 ---
 
-## 📂 File Structure
+##  File Structure
 
 *   `backend/` - All Python source code.
     *   `analyze_engine.py`: Core engine. Reads traffic, queries AI model, writes to Redis.
@@ -87,7 +87,7 @@ For development purposes, you can run services individually.
 
 ---
 
-## 🛠️ Training & Testing the Model
+## Training & Testing the Model
 
 If you wish to retrain the model from scratch or test with a new dataset, use `train_model.py`.
 
@@ -104,7 +104,7 @@ python backend/train_model.py --mode adapt --file "backend/datasets/raw/CIC-IDS 
 
 ---
 
-## ❓ FAQ
+##  FAQ
 
 **Q: Why does the IP show as "Unknown" in logs?**
 A: If you are using the "Machine Learning" version of the datasets, columns like sensitive IPs are removed for privacy. Using "PCAP" or "Traffic Lab" versions will reveal the IPs.
