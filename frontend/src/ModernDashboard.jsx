@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import {
   Shield, Zap, Activity, Globe, AlertTriangle, Server,
-  Database, Search, Wifi, WifiOff
+  Database, Search, Wifi, WifiOff, ShieldX // ShieldX eklendi
 } from 'lucide-react';
 import AuthLogs from './components/AuthLogs';
 import { API_BASE, WS_BASE } from './config';
@@ -55,18 +55,22 @@ const GeoMap = ({ active }) => (
   </div>
 );
 
-const RiskBadge = ({ confidence }) => {
+const RiskBadge = ({ confidence, ruleId, listType }) => {
+  // Ozan'ın istediği yeni badge mantığı
+  if (listType === 'whitelist') {
+    return <span className="px-2 py-0.5 rounded text-[10px] font-bold border bg-slate-500/20 text-slate-400 border-slate-500/30">GÜVENLİ LİSTE</span>;
+  }
+  if (listType === 'blacklist') {
+    return <span className="px-2 py-0.5 rounded text-[10px] font-bold border bg-red-900/40 text-red-500 border-red-500/50 flex items-center gap-1">YASAKLI IP <ShieldX size={10}/></span>;
+  }
+
+  // Standart AI Tespitleri
   let level = 'Düşük';
   let color = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-
   if (confidence > 0.8) { level = 'KRİTİK'; color = 'bg-red-500/20 text-red-400 border-red-500/30'; }
   else if (confidence > 0.5) { level = 'YÜKSEK'; color = 'bg-orange-500/20 text-orange-400 border-orange-500/30'; }
 
-  return (
-    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${color}`}>
-      {level}
-    </span>
-  );
+  return <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${color}`}>{level}</span>;
 };
 
 export default function ModernDashboard() {
@@ -143,6 +147,8 @@ export default function ModernDashboard() {
             features: {}, // Featurelar backend'den ham gelmiyor artık, bu boş kalabilir
             src: data.src_ip || 'Gizli IP',   // Backend: src_ip
             dest: data.dst_port || '?',       // Backend: dst_port
+            rule_id: data.rule_id,            // Backend'den gelen rule_id eklendi
+            list_type: data.list_type         // Backend'den gelen list_type eklendi
           };
 
           setAlerts(prev => [newAlert, ...prev].slice(0, 50));
@@ -377,7 +383,7 @@ export default function ModernDashboard() {
                   {alerts.map((alert) => (
                     <tr key={alert.id} className="hover:bg-slate-700/50 transition cursor-pointer group">
                       <td className="px-4 py-3 font-mono text-slate-400 text-xs">{alert.time}</td>
-                      <td className="px-4 py-3"><RiskBadge confidence={alert.confidence} /></td>
+                      <td className="px-4 py-3"><RiskBadge confidence={alert.confidence} ruleId={alert.rule_id} listType={alert.list_type} /></td>
                       <td className="px-4 py-3 text-red-300 font-bold">{alert.type}</td>
                       <td className="px-4 py-3 font-mono text-slate-300 text-xs">{alert.src}</td>
                       <td className="px-4 py-3 font-mono text-cyan-300 text-xs">{alert.dest}</td>
