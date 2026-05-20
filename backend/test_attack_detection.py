@@ -34,6 +34,7 @@ if BASE_DIR not in sys.path:
 from scapy.all import AsyncSniffer, IP  # noqa: E402
 
 from nfv3_flow_tracker import NFv3FlowExporter  # noqa: E402
+from ndpi_resolver import NDPIResolver  # noqa: E402
 from model_provider import get_model_provider  # noqa: E402
 
 
@@ -132,7 +133,10 @@ class Tester:
         self.provider = get_model_provider(self.provider_name)
         self.provider.load()
 
-        exporter = NFv3FlowExporter(on_flow_ready=self._on_flow_ready)
+        resolver = NDPIResolver(interface="en0")
+        if not resolver.start():
+            resolver = None
+        exporter = NFv3FlowExporter(on_flow_ready=self._on_flow_ready, l7_resolver=resolver)
 
         # Background sweep so idle / half-open flows time out even when no
         # further packets arrive on them. NFv3FlowExporter's internal sweep
@@ -184,6 +188,8 @@ class Tester:
         sweep_stop.set()
         sweep_thread.join(timeout=2)
         exporter.flush_all()
+        if resolver is not None:
+            resolver.stop()
 
         # ── Partition flows by window ─────────────────────────────────
         baseline_flows = [f for f in self.flows if f[0] <= baseline_end]

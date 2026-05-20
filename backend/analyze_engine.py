@@ -15,6 +15,7 @@ try:
     from model_provider import get_model_provider
     from packet_flow import CICFlowTracker
     from nfv3_flow_tracker import NFv3FlowExporter
+    from ndpi_resolver import NDPIResolver
     from ip_matcher import IPRuleMatcher
 except ImportError:
     print("Error: Missing required libraries. Please install them using 'pip install -r requirements.txt'")
@@ -230,8 +231,12 @@ class TrafficEngine:
             """Flow kapandiginda cagirilir -> model prediction -> Redis."""
             self.process_packet(features, f"{src_ip}->{dst_ip}")
 
+        resolver = None
         if use_nfv3:
-            tracker = NFv3FlowExporter(on_flow_ready=on_flow_ready)
+            resolver = NDPIResolver(interface="en0")
+            if not resolver.start():
+                resolver = None
+            tracker = NFv3FlowExporter(on_flow_ready=on_flow_ready, l7_resolver=resolver)
         else:
             tracker = CICFlowTracker(timeout=120.0, on_flow_ready=on_flow_ready)
 
@@ -248,6 +253,8 @@ class TrafficEngine:
         except KeyboardInterrupt:
             print("\n[Engine] Stopping... Flushing remaining flows.")
             tracker.flush_all()
+            if resolver is not None:
+                resolver.stop()
             print("[Engine] Done.")
     
     def start(self):

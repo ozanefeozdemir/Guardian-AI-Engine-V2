@@ -11,6 +11,7 @@ asyncpg
 requests
 httpx_ws
 scapy
+nfstream
 pyyaml
 tqdm
 python-jose[cryptography]

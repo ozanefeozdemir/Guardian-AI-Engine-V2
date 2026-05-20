@@ -124,12 +124,16 @@ class NFv3FlowExporter:
         inactive_timeout: float = INACTIVE_TIMEOUT_DEFAULT,
         fin_grace: float = FIN_GRACE_DEFAULT,
         require_syn: bool = True,
+        l7_resolver=None,
     ):
         self.on_flow_ready = on_flow_ready
         self.active_timeout = active_timeout
         self.inactive_timeout = inactive_timeout
         self.fin_grace = fin_grace
         self.require_syn = require_syn
+        # Optional side-channel for L7_PROTO. When set, _build_record asks the
+        # resolver for the nDPI numeric id; falls back to _guess_l7_proto.
+        self.l7_resolver = l7_resolver
         self.active_flows: dict = {}
         self._last_timeout_check = 0.0
 
@@ -409,6 +413,16 @@ class NFv3FlowExporter:
         s2d_iat = self._iat_stats_ms(flow["fwd_timestamps"])
         d2s_iat = self._iat_stats_ms(flow["bwd_timestamps"])
 
+        l7_proto = flow["l7_proto"]
+        if self.l7_resolver is not None:
+            resolved = self.l7_resolver.lookup(
+                flow["src_ip"], flow["src_port"],
+                flow["dst_ip"], flow["dst_port"],
+                flow["protocol"],
+            )
+            if resolved is not None and resolved != 0:
+                l7_proto = resolved
+
         return {
             "IPV4_SRC_ADDR": flow["src_ip"],
             "L4_SRC_PORT": flow["src_port"],
@@ -417,7 +431,7 @@ class NFv3FlowExporter:
             "FLOW_START_MILLISECONDS": int(flow["start_time"] * 1000),
             "FLOW_END_MILLISECONDS": int(flow["last_time"] * 1000),
             "PROTOCOL": flow["protocol"],
-            "L7_PROTO": flow["l7_proto"],
+            "L7_PROTO": l7_proto,
             "IN_BYTES": flow["in_bytes"],
             "IN_PKTS": flow["in_pkts"],
             "OUT_BYTES": flow["out_bytes"],
