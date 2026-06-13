@@ -1,0 +1,235 @@
+/* =============================================================
+   Guardian Design System — Foundations
+   Colors + Typography tokens, base + semantic
+   =============================================================
+   Design direction: evolve the existing Tailwind slate/cyan
+   cybersecurity dashboard into a more disciplined,
+   editorial-leaning system. Keep the dark "command center"
+   DNA, but trade neon gradients for restrained signal accents
+   and a typographic voice that mixes serif display with a
+   precise mono for telemetry.
+   ============================================================= */
+
+/* ---- 1. Webfonts -------------------------------------------- */
+/* Display: Instrument Serif — editorial, italic-capable
+   UI:      Geist            — neutral, clean, not Inter
+   Mono:    Geist Mono       — telemetry, IPs, counters       */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap');
+
+:root {
+
+  /* ===========================================================
+     COLORS — Base palette
+     =========================================================== */
+
+  /* Ink scale (dark surfaces) — replaces Tailwind slate-950/900 */
+  --ink-0:        #06080F;   /* deepest, page bg, header */
+  --ink-1:        #0B101A;   /* canvas */
+  --ink-2:        #131A28;   /* surface / card */
+  --ink-3:        #1B2333;   /* elevated card, input fill */
+  --ink-4:        #232C3E;   /* hairline border */
+  --ink-5:        #2E394F;   /* default border */
+  --ink-6:        #3E4A65;   /* hover border, dividers in light fields */
+
+  /* Foreground on dark */
+  --fg-0:         #F6F8FC;   /* primary text */
+  --fg-1:         #DCE2EE;   /* near-primary, body */
+  --fg-2:         #B6C0D4;   /* secondary / labels */
+  --fg-3:         #7C8AA3;   /* tertiary / meta */
+  --fg-4:         #4F5A72;   /* quaternary / placeholders */
+  --fg-5:         #303A4F;   /* disabled */
+
+  /* Paper scale (for the optional light "classic" surface) */
+  --paper-0:      #FBFAF6;   /* warm off-white background */
+  --paper-1:      #F2F1EC;   /* secondary surface */
+  --paper-2:      #E6E5DD;   /* border on paper */
+  --paper-3:      #C9C8BE;   /* divider on paper */
+  --paper-ink:    #0E1422;   /* primary text on paper */
+  --paper-ink-2:  #4A5366;   /* secondary text on paper */
+
+  /* Signal — primary accent. Refined from raw cyan-500 (#06b6d4)
+     to a softer phosphor-cyan that reads as terminal/CRT without
+     burning eyes. Use sparingly: links, active state, key data. */
+  --signal-100:   #E6FBFB;
+  --signal-200:   #B7F1F4;
+  --signal-300:   #7BE3E8;
+  --signal-400:   #4DD0D7;   /* primary signal */
+  --signal-500:   #2DB6BE;   /* hover, deeper */
+  --signal-600:   #1E8E95;   /* press, deep border */
+  --signal-700:   #146069;
+  --signal-800:   #0C3A40;
+  --signal-glow:  rgba(77, 208, 215, 0.28);
+  --signal-tint:  rgba(77, 208, 215, 0.08);   /* subtle bg wash */
+
+  /* Status — semantic, calibrated for dark surfaces */
+  --critical:     #FF5A6B;
+  --critical-dim: #B43747;
+  --critical-tint:rgba(255, 90, 107, 0.10);
+  --critical-glow:rgba(255, 90, 107, 0.30);
+
+  --warning:      #F5B549;
+  --warning-dim:  #A37325;
+  --warning-tint: rgba(245, 181, 73, 0.12);
+
+  --success:      #4FD18B;
+  --success-dim:  #2D8055;
+  --success-tint: rgba(79, 209, 139, 0.10);
+
+  --info:         #6DA6FF;
+  --info-dim:     #3F6BB4;
+  --info-tint:    rgba(109, 166, 255, 0.10);
+
+  /* Risk-level scale (named after dashboard usage)
+     Kritik / Yüksek / Orta / Düşük                       */
+  --risk-critical: var(--critical);   /* #FF5A6B */
+  --risk-high:     #F08A4B;           /* refined orange */
+  --risk-medium:   var(--warning);    /* amber  */
+  --risk-low:      var(--info);       /* blue   */
+
+  /* ===========================================================
+     SHADOWS, BORDERS, RADII
+     =========================================================== */
+
+  --radius-xs:  2px;
+  --radius-sm:  4px;
+  --radius-md:  6px;     /* default */
+  --radius-lg:  10px;    /* cards */
+  --radius-xl:  14px;    /* hero cards, modals */
+  --radius-2xl: 22px;
+  --radius-pill: 999px;
+
+  --border-hair: 1px solid var(--ink-4);
+  --border-default: 1px solid var(--ink-5);
+
+  /* Shadows: crisp + dark, with a tinted variant for "armed" cards */
+  --shadow-1: 0 1px 0 0 rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.35);
+  --shadow-2: 0 4px 12px -2px rgba(0,0,0,0.55), 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-3: 0 12px 32px -8px rgba(0,0,0,0.65), 0 2px 6px rgba(0,0,0,0.4);
+  --shadow-signal: 0 0 0 1px var(--signal-600), 0 0 24px -4px var(--signal-glow);
+  --shadow-critical: 0 0 0 1px var(--critical-dim), 0 0 28px -4px var(--critical-glow);
+
+  /* ===========================================================
+     SPACING (4px base)
+     =========================================================== */
+  --s-1:  4px;
+  --s-2:  8px;
+  --s-3:  12px;
+  --s-4:  16px;
+  --s-5:  20px;
+  --s-6:  24px;
+  --s-8:  32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+  --s-20: 80px;
+
+  /* ===========================================================
+     TYPOGRAPHY — Families
+     =========================================================== */
+  --font-display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --font-sans:    'Geist', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:    'Geist Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+
+  /* Type scale (px / line-height / weight tuning)
+     Optimized for a ~1.25 minor-third with display jumps      */
+  --t-display-1-size:   84px; --t-display-1-lh: 0.95; --t-display-1-tr: -0.025em;
+  --t-display-2-size:   60px; --t-display-2-lh: 1.00; --t-display-2-tr: -0.02em;
+  --t-display-3-size:   44px; --t-display-3-lh: 1.05; --t-display-3-tr: -0.018em;
+
+  --t-h1-size:   34px; --t-h1-lh: 1.15; --t-h1-tr: -0.014em;
+  --t-h2-size:   26px; --t-h2-lh: 1.2;  --t-h2-tr: -0.011em;
+  --t-h3-size:   20px; --t-h3-lh: 1.3;  --t-h3-tr: -0.005em;
+  --t-h4-size:   16px; --t-h4-lh: 1.4;  --t-h4-tr:  0;
+
+  --t-body-size:    15px; --t-body-lh:   1.6;
+  --t-body-sm-size: 13px; --t-body-sm-lh:1.55;
+  --t-caption-size: 12px; --t-caption-lh:1.45;
+
+  --t-mono-size:    13px;
+  --t-mono-sm-size: 11px;
+
+  /* Eyebrow / kicker — mono uppercase, used everywhere in dashboard */
+  --t-eyebrow-size: 11px;
+  --t-eyebrow-tr:   0.18em;
+
+  /* Weights */
+  --w-light:    300;
+  --w-regular:  400;
+  --w-medium:   500;
+  --w-semibold: 600;
+  --w-bold:     700;
+}
+
+/* =============================================================
+   SEMANTIC ROLES — apply directly to elements
+   ============================================================= */
+
+/* Display — editorial / hero. Always serif italic for the
+   word being emphasized; the rest in Geist.                  */
+.t-display-1 {
+  font-family: var(--font-sans);
+  font-size:   var(--t-display-1-size);
+  line-height: var(--t-display-1-lh);
+  letter-spacing: var(--t-display-1-tr);
+  font-weight: var(--w-light);
+  color:       var(--fg-0);
+}
+.t-display-1 em,
+.t-display-2 em,
+.t-display-3 em {
+  font-family: var(--font-display);
+  font-style:  italic;
+  font-weight: var(--w-regular);
+  color:       var(--signal-300);
+}
+.t-display-2 {
+  font-family: var(--font-sans);
+  font-size:   var(--t-display-2-size);
+  line-height: var(--t-display-2-lh);
+  letter-spacing: var(--t-display-2-tr);
+  font-weight: var(--w-light);
+}
+.t-display-3 {
+  font-family: var(--font-sans);
+  font-size:   var(--t-display-3-size);
+  line-height: var(--t-display-3-lh);
+  letter-spacing: var(--t-display-3-tr);
+  font-weight: var(--w-regular);
+}
+
+/* Headings — UI / section */
+.t-h1 { font: var(--w-semibold) var(--t-h1-size)/var(--t-h1-lh) var(--font-sans); letter-spacing: var(--t-h1-tr); }
+.t-h2 { font: var(--w-semibold) var(--t-h2-size)/var(--t-h2-lh) var(--font-sans); letter-spacing: var(--t-h2-tr); }
+.t-h3 { font: var(--w-semibold) var(--t-h3-size)/var(--t-h3-lh) var(--font-sans); letter-spacing: var(--t-h3-tr); }
+.t-h4 { font: var(--w-semibold) var(--t-h4-size)/var(--t-h4-lh) var(--font-sans); }
+
+/* Body */
+.t-body    { font: var(--w-regular) var(--t-body-size)/var(--t-body-lh) var(--font-sans); color: var(--fg-1); }
+.t-body-sm { font: var(--w-regular) var(--t-body-sm-size)/var(--t-body-sm-lh) var(--font-sans); color: var(--fg-2); }
+.t-caption { font: var(--w-regular) var(--t-caption-size)/var(--t-caption-lh) var(--font-sans); color: var(--fg-3); }
+
+/* Mono — telemetry. The dashboard's voice for IPs, ports,
+   timestamps, counters, anything that should feel like data. */
+.t-mono     { font: var(--w-regular) var(--t-mono-size)/1.5 var(--font-mono); font-variant-numeric: tabular-nums; }
+.t-mono-sm  { font: var(--w-regular) var(--t-mono-sm-size)/1.5 var(--font-mono); font-variant-numeric: tabular-nums; }
+.t-num      { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-feature-settings: "ss01"; }
+
+/* Eyebrow — the dashboard's signature label style.
+   Mono uppercase with wide tracking, often above a metric.   */
+.t-eyebrow {
+  font: var(--w-medium) var(--t-eyebrow-size)/1 var(--font-mono);
+  letter-spacing: var(--t-eyebrow-tr);
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+/* Inline code */
+.t-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 2px 6px;
+  background: var(--ink-3);
+  border: 1px solid var(--ink-4);
+  border-radius: var(--radius-xs);
+  color: var(--signal-300);
+}

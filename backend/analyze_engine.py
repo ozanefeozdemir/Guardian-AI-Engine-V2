@@ -9,6 +9,7 @@ try:
     import argparse
     import asyncio
     import math
+    import hashlib
     from scapy.all import sniff
     from scapy.layers.inet import IP, TCP, UDP
     from feature_extractor import MAPPING
@@ -30,6 +31,27 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 DEFAULT_DATASET = os.path.join(BASE_DIR, "datasets", "raw", "CIC-IDS 2018","02-15-2018.csv")
+
+# CIC-IDS "MachineLearning" CSV'lerinde Source IP kolonu gizlilik için silinmiştir.
+# Böyle bir veri setinde 'Unknown' yerine, akış parmak izinden türetilmiş
+# DETERMİNİSTİK (aynı akış -> hep aynı IP) gerçekçi bir kaynak IP üretiriz.
+_ATTACKER_BLOCKS = [45, 84, 91, 103, 185, 193, 203, 209, 5, 77]
+
+def synthesize_source_ip(record: dict, ground_truth_label=None) -> str:
+    """Akış parmak izinden türetilmiş, tekrarlanabilir sahte kaynak IP.
+    Saldırılar dış/halka açık bloklardan, iyi huylu trafik iç LAN'dan (192.168.x.x) görünür.
+    Not: Gerçek IP veri setinde yoksa devreye girer; TrafficLabelling/Flow ID veya
+    canlı yakalama varsa gerçek IP kullanılır."""
+    is_attack = ground_truth_label is not None and "benign" not in str(ground_truth_label).lower()
+    fingerprint = "|".join(str(record.get(k, "")) for k in (
+        "Destination Port", "Flow Duration", "Total Fwd Packets",
+        "Total Backward Packets", "Flow Bytes/s", "Flow Packets/s",
+    ))
+    h = hashlib.md5(fingerprint.encode("utf-8", "ignore")).digest()
+    if is_attack:
+        a = _ATTACKER_BLOCKS[h[0] % len(_ATTACKER_BLOCKS)]
+        return f"{a}.{h[1]}.{h[2]}.{(h[3] % 254) + 1}"
+    return f"192.168.{h[1] % 256}.{(h[2] % 254) + 1}"
 
 class TrafficEngine:
     def __init__(self, mode="simulation", file_path=None, provider_name=None):
@@ -193,20 +215,29 @@ class TrafficEngine:
             
             # Extract Label before feature mapping (Label might be lost or renamed)
             labels = chunk['Label'].values if 'Label' in chunk.columns else [None]*len(chunk)
-            
-            # Extract Source IP if available (CIC-IDS 2018 usually has 'Src IP', 2017 has 'Source IP')
-            source_ips = ["Unknown"] * len(chunk)
+
+            # Gerçek kaynak IP'yi kolonlardan veya Flow ID'den çek (varsa).
+            # CIC-IDS 2018: 'Src IP' | 2017 TrafficLabelling: 'Source IP' veya
+            # 'Flow ID' ("srcIP-dstIP-srcPort-dstPort-proto"). MachineLearning
+            # sürümünde hiçbiri yoktur -> aşağıda sentezlenir.
+            source_ips = None
             if 'Src IP' in chunk.columns:
-                source_ips = chunk['Src IP'].values
+                source_ips = chunk['Src IP'].astype(str).values
             elif 'Source IP' in chunk.columns:
-                source_ips = chunk['Source IP'].values
-            
+                source_ips = chunk['Source IP'].astype(str).values
+            elif 'Flow ID' in chunk.columns:
+                source_ips = chunk['Flow ID'].astype(str).str.split('-').str[0].values
+
             chunk = chunk.rename(columns=MAPPING)
-            
+
             records = chunk.to_dict(orient='records')
-            
+
             for i, record in enumerate(records):
-                src_ip = source_ips[i] if i < len(source_ips) else "Unknown"
+                real_ip = source_ips[i] if (source_ips is not None and i < len(source_ips)) else None
+                if real_ip and real_ip not in ('', 'nan', 'Unknown', '0'):
+                    src_ip = real_ip
+                else:
+                    src_ip = synthesize_source_ip(record, labels[i])
                 self.process_packet(record, f"{src_ip}", ground_truth_label=labels[i])
             
             total_processed += len(records)
