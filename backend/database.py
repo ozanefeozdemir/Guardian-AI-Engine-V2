@@ -4,7 +4,11 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import sessionmaker, declarative_base
 from dotenv import load_dotenv
+from passlib.context import CryptContext
 load_dotenv()
+
+# Default admin kullanıcısının şifresini hash'lemek için (auth.py ile aynı şema)
+_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 _default_db_url = "postgresql+asyncpg://postgres:postgres@localhost:5432/guardian_ai"
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -35,6 +39,7 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await _seed_rbac()
+    await _seed_admin_user()
 
 
 # Permissions used by the IP whitelist/blacklist endpoints. Kept here so the
@@ -79,3 +84,38 @@ async def _seed_rbac():
                     admin.permissions.append(perm)
 
         await session.commit()
+
+
+async def _seed_admin_user():
+    """Varsayılan admin kullanıcısını idempotent şekilde oluşturur.
+
+    Dashboard auth guard arkasında olduğu için, ilk açılışta giriş yapılabilmesi
+    adına admin kullanıcısı (admin rolüyle) burada seed edilir. Kimlik bilgileri
+    DEFAULT_ADMIN_* ortam değişkenlerinden okunur (varsayılan: admin / admin123).
+    """
+    from models import User, Role
+
+    username = os.getenv("DEFAULT_ADMIN_USER", "admin")
+    password = os.getenv("DEFAULT_ADMIN_PASS", "admin123")
+    email = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@guardian.ai")
+
+    async with AsyncSessionLocal() as session:
+        existing = (
+            await session.execute(select(User).where(User.username == username))
+        ).scalars().first()
+        if existing:
+            return
+
+        admin_role = (
+            await session.execute(select(Role).where(Role.name == "admin"))
+        ).scalars().first()
+
+        session.add(User(
+            username=username,
+            email=email,
+            hashed_password=_pwd_context.hash(password),
+            role_id=admin_role.id if admin_role else None,
+            is_active=True,
+        ))
+        await session.commit()
+        print(f"[seed] Varsayılan admin kullanıcısı oluşturuldu: {username}")

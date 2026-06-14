@@ -1,0 +1,26 @@
+============================================================
+CONFUSION MATRIX — NF-UNSW-NB15-v3 (tum dataset)
+Total Flow: 2,365,424
+============================================================
+
+                   Pred:Benign     Pred:Attack
+  Actual:Benign       2,236,767             964
+  Actual:Attack           5,237         122,456
+
+  Accuracy   : 99.7378%
+  Precision  : 99.2189%
+  Recall/TPR : 95.8988%
+  Specificity: 99.9569%
+  F1-score   : 97.5306%
+  FP (false alarm): 964   FN (missed attack): 5,237
+
+Clasiification (recall):
+  Exploits             40,372/42,748    (94.44%)
+  Fuzzers              33,125/33,816    (97.96%)
+  Generic              18,633/19,651    (94.82%)
+  Reconnaissance       16,691/17,074    (97.76%)
+  DoS                   5,616/5,980     (93.91%)
+  Backdoor              4,498/4,659     (96.54%)
+  Shellcode             2,144/2,381     (90.05%)
+  Analysis              1,226/1,226     (100.00%)
+  Worms                   151/158       (95.57%)

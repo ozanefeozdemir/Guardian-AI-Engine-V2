@@ -1,0 +1,501 @@
+/* ===========================================================
+   Guardian Dashboard — Operations Console
+   ===========================================================
+   A purpose-built shell for a real-time IDS:
+   - Persistent left rail (real navigation, not a floating pill)
+   - Top sub-header with breadcrumb + utility actions
+   - Bento canvas: cards of intentionally varied sizes
+   - Bottom status bar for connection / engine / hostname
+   - Linear/Vercel-grade restraint: hairlines, monochrome,
+     accents only where they earn their place
+   =========================================================== */
+@import url('./colors_and_type.css');
+
+.dash-shell,
+body {
+  /* Console palette — neutral cool, almost charcoal */
+  --ink-0:  #0A0B10;
+  --ink-1:  #0E0F15;
+  --ink-2:  #14161E;
+  --ink-3:  #1B1E28;
+  --ink-4:  #232631;
+  --ink-5:  #2C303D;
+  --ink-6:  #3B4051;
+
+  --fg-0:   #ECEEF3;
+  --fg-1:   #C7CAD4;
+  --fg-2:   #969BAA;
+  --fg-3:   #686D7E;
+  --fg-4:   #464A5A;
+
+  /* Single accent — refined teal, used as the operator's "primary action" color */
+  --signal-100: #DEFAF6;
+  --signal-200: #A5F0E5;
+  --signal-300: #5EEAD4;
+  --signal-400: #2DD4BF;
+  --signal-500: #14B8A6;
+  --signal-600: #0D9488;
+  --signal-700: #0F766E;
+  --signal-800: #115E59;
+  --signal-glow: rgba(45, 212, 191, 0.20);
+
+  /* Status — kept honest */
+  --critical:     #F87171;
+  --critical-dim: #B23B47;
+  --critical-tint:rgba(248, 113, 113, 0.10);
+  --critical-glow:rgba(248, 113, 113, 0.30);
+  --success:      #34D399;
+  --warning:      #FBBF24;
+  --info:         #818CF8;
+
+  /* App chrome dimensions */
+  --rail-w:      244px;
+  --header-h:   48px;
+  --statusbar-h: 32px;
+  --content-pad: 28px;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; padding: 0; min-height: 100vh; background: var(--ink-0); color: var(--fg-0); font-family: var(--font-sans); font-feature-settings: "ss01"; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+::selection { background: var(--signal-400); color: var(--ink-0); }
+button { font-family: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--signal-400); outline-offset: 2px; border-radius: 4px; }
+input, select { font-family: inherit; }
+
+/* =========================================================
+   APP SHELL — left rail + main column + status bar
+   ========================================================= */
+.dash-shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-rows:    1fr auto;
+  grid-template-areas:
+    "rail main"
+    "rail status";
+  min-height: 100vh;
+  background: var(--ink-0);
+  color: var(--fg-1);
+}
+
+/* ---- Left rail ---- */
+.console-rail {
+  grid-area: rail;
+  background: var(--ink-1);
+  border-right: 1px solid var(--ink-4);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+.console-rail__brand {
+  padding: 4px 20px 20px;
+  border-bottom: 1px solid var(--ink-4);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.console-rail__brand-tile {
+  width: 26px; height: 26px;
+  background: linear-gradient(135deg, #14B8A6 0%, #0F766E 100%);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.console-rail__brand-tile svg { color: white; }
+.console-rail__brand-word {
+  font: 600 14px/1 var(--font-sans);
+  color: var(--fg-0);
+  letter-spacing: -0.005em;
+}
+.console-rail__brand-sub {
+  font: 500 9px/1 var(--font-mono);
+  color: var(--fg-3);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+.console-rail__section {
+  padding: 18px 12px 4px;
+  font: 600 9px/1 var(--font-mono);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--fg-4);
+}
+.console-rail__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 1px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font: 500 13px/1 var(--font-sans);
+  color: var(--fg-2);
+  transition: all 120ms ease;
+  border: 0;
+  background: transparent;
+  width: calc(100% - 16px);
+  text-align: left;
+}
+.console-rail__item:hover { background: var(--ink-3); color: var(--fg-0); }
+.console-rail__item.active {
+  background: var(--ink-3);
+  color: var(--fg-0);
+  box-shadow: inset 2px 0 0 0 var(--signal-400);
+}
+.console-rail__item svg { flex-shrink: 0; opacity: 0.85; }
+.console-rail__item .badge-count {
+  margin-left: auto;
+  font: 600 10px/1 var(--font-mono);
+  background: var(--ink-4);
+  color: var(--fg-2);
+  padding: 3px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+.console-rail__item.active .badge-count { background: var(--signal-700); color: var(--signal-200); }
+.console-rail__item.armed .badge-count { background: var(--critical-dim); color: white; }
+
+.console-rail__foot {
+  margin-top: auto;
+  padding: 12px;
+  border-top: 1px solid var(--ink-4);
+}
+.console-rail__user {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+.console-rail__user-avatar {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  background: var(--ink-3);
+  border: 1px solid var(--ink-5);
+  display: flex; align-items: center; justify-content: center;
+  font: 600 11px/1 var(--font-mono);
+  color: var(--signal-300);
+}
+.console-rail__user-meta { flex: 1; min-width: 0; }
+.console-rail__user-name { font: 500 12px/1 var(--font-sans); color: var(--fg-0); }
+.console-rail__user-role { font: 500 9px/1 var(--font-mono); letter-spacing: 0.14em; color: var(--fg-3); text-transform: uppercase; margin-top: 4px; }
+
+/* ---- Main column ---- */
+.console-main {
+  grid-area: main;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Top sub-header */
+.console-topbar {
+  height: var(--header-h);
+  border-bottom: 1px solid var(--ink-4);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--content-pad);
+  gap: 16px;
+  background: var(--ink-0);
+  position: sticky; top: 0; z-index: 30;
+}
+.console-topbar__crumb {
+  display: flex; align-items: center; gap: 8px;
+  font: 500 12px/1 var(--font-sans);
+  color: var(--fg-2);
+}
+.console-topbar__crumb .sep { color: var(--fg-4); font-family: var(--font-mono); }
+.console-topbar__crumb .here { color: var(--fg-0); font-weight: 600; }
+.console-topbar__spacer { flex: 1; }
+.console-topbar__util {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-2);
+  font: 500 11px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  transition: all 120ms;
+}
+.console-topbar__util:hover { background: var(--ink-2); color: var(--fg-0); }
+.console-topbar__util.primary { background: var(--ink-3); border-color: var(--ink-5); }
+
+/* Canvas */
+.console-canvas {
+  flex: 1;
+  padding: var(--content-pad);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* =========================================================
+   BENTO — varied-size card grid
+   ========================================================= */
+.bento {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+}
+.b-c1  { grid-column: span 1; }
+.b-c2  { grid-column: span 2; }
+.b-c3  { grid-column: span 3; }
+.b-c4  { grid-column: span 4; }
+.b-c5  { grid-column: span 5; }
+.b-c6  { grid-column: span 6; }
+.b-c7  { grid-column: span 7; }
+.b-c8  { grid-column: span 8; }
+.b-c9  { grid-column: span 9; }
+.b-c12 { grid-column: span 12; }
+@media (max-width: 1100px) {
+  .b-c3, .b-c4, .b-c5 { grid-column: span 6; }
+  .b-c7, .b-c8, .b-c9 { grid-column: span 12; }
+}
+
+/* =========================================================
+   CARD — Linear-grade card
+   ========================================================= */
+.dcard {
+  background: var(--ink-1);
+  border: 1px solid var(--ink-4);
+  border-radius: 10px;
+  padding: 20px 22px;
+  position: relative;
+  transition: border-color 180ms;
+}
+.dcard:hover { border-color: var(--ink-5); }
+.dcard.armed {
+  border-color: var(--critical-dim);
+  background:
+    radial-gradient(circle at top right, rgba(248,113,113,0.06) 0%, transparent 50%),
+    var(--ink-1);
+}
+.dcard.primary { border-color: var(--signal-700); }
+.dcard.flat { background: transparent; border: 0; padding: 0; }
+
+.dcard__head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin: -4px -4px 16px;
+  padding: 4px 4px 14px;
+  border-bottom: 1px solid var(--ink-4);
+}
+.dcard__title {
+  font: 500 12px/1 var(--font-mono);
+  color: var(--fg-2);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.dcard__title svg { opacity: 0.8; }
+.dcard__meta {
+  font: 500 10px/1 var(--font-mono);
+  color: var(--fg-4);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* =========================================================
+   KPI — minimal: tiny label + big number + spark/meta
+   ========================================================= */
+.kpi { display: flex; flex-direction: column; gap: 0; min-height: 0; }
+.kpi__eyebrow {
+  font: 500 10px/1 var(--font-mono);
+  color: var(--fg-3);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.kpi__val {
+  font: 500 38px/1 var(--font-sans);
+  color: var(--fg-0);
+  letter-spacing: -0.022em;
+  font-variant-numeric: tabular-nums;
+  margin-top: 14px;
+}
+.kpi__meta {
+  font: 500 11px/1 var(--font-mono);
+  margin-top: 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--fg-3);
+}
+.kpi__icon { display: none; }   /* the canvas already tells you what these are */
+
+.armed .kpi__val     { color: var(--critical) !important; }
+.armed .kpi__eyebrow { color: var(--critical) !important; }
+.armed .kpi__meta    { color: var(--critical) !important; }
+
+/* Eyebrow helper */
+.eyebrow { font: 500 10px/1 var(--font-mono); letter-spacing: 0.18em; text-transform: uppercase; color: var(--fg-3); }
+
+/* Pulse dot */
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.dot--ok    { background: var(--success); box-shadow: 0 0 8px var(--success); }
+.dot--warn  { background: var(--warning); box-shadow: 0 0 8px var(--warning); }
+.dot--crit  { background: var(--critical); box-shadow: 0 0 8px var(--critical); animation: pulse 1.6s ease-in-out infinite; }
+.dot--idle  { background: var(--fg-4); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
+@keyframes ping  { 0% { transform: scale(0.8); opacity: 0.8; } 100% { transform: scale(2.5); opacity: 0; } }
+
+/* =========================================================
+   BUTTONS — refined neutral, single-color accent only
+   ========================================================= */
+.btn {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 12px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+  transition: all 140ms ease;
+  white-space: nowrap;
+}
+.btn--primary  { background: var(--signal-500); color: var(--ink-0); font-weight: 600; }
+.btn--primary:hover { background: var(--signal-400); }
+.btn--secondary{ background: var(--ink-2); color: var(--fg-1); border-color: var(--ink-5); }
+.btn--secondary:hover { background: var(--ink-3); border-color: var(--ink-6); }
+.btn--ghost    { background: transparent; color: var(--fg-2); border-color: transparent; }
+.btn--ghost:hover { color: var(--fg-0); background: var(--ink-2); }
+.btn--critical { background: var(--ink-2); color: var(--critical); border-color: var(--critical-dim); }
+.btn--critical:hover { background: var(--critical-dim); color: white; }
+
+/* =========================================================
+   RISK BADGE — pill, monochrome with a colored ring
+   ========================================================= */
+.risk {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  letter-spacing: 0.10em;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: uppercase;
+}
+.risk--critical { background: rgba(248,113,113,0.08); color: var(--critical); border-color: rgba(248,113,113,0.30); }
+.risk--high     { background: rgba(251,146,60,0.08);  color: #FB923C;       border-color: rgba(251,146,60,0.30); }
+.risk--medium   { background: rgba(251,191,36,0.08);  color: var(--warning); border-color: rgba(251,191,36,0.30); }
+.risk--low      { background: rgba(129,140,248,0.08); color: var(--info);    border-color: rgba(129,140,248,0.30); }
+.risk--safe     { background: rgba(52,211,153,0.08);  color: var(--success); border-color: rgba(52,211,153,0.30); }
+.risk--block    { background: rgba(178,59,71,0.18);   color: var(--critical); border-color: rgba(248,113,113,0.50); font-weight: 700; }
+
+.pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 999px; background: var(--ink-2); border: 1px solid var(--ink-5); font: 500 10px/1 var(--font-mono); letter-spacing: 0.10em; color: var(--fg-2); text-transform: uppercase; }
+
+/* =========================================================
+   INPUTS
+   ========================================================= */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field__label { font: 500 10px/1 var(--font-mono); color: var(--fg-3); letter-spacing: 0.14em; text-transform: uppercase; }
+.input-wrap { position: relative; }
+.input { width: 100%; background: var(--ink-1); border: 1px solid var(--ink-5); color: var(--fg-0); padding: 10px 14px 10px 36px; border-radius: 6px; font: 400 13px/1 var(--font-sans); outline: none; transition: all 140ms; appearance: none; -webkit-appearance: none; }
+.input.no-icon { padding-left: 14px; }
+.input:focus { border-color: var(--signal-500); box-shadow: 0 0 0 3px rgba(45,212,191,0.12); }
+.input.error { border-color: var(--critical); box-shadow: 0 0 0 3px rgba(248,113,113,0.12); }
+.input::placeholder { color: var(--fg-4); }
+.input-wrap__icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--fg-4); }
+select.input { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23686D7E' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; cursor: pointer; }
+
+/* =========================================================
+   TABLES
+   ========================================================= */
+.table { width: 100%; border-collapse: collapse; }
+.table thead th { text-align: left; padding: 10px 14px; background: var(--ink-1); color: var(--fg-3); font: 500 10px/1 var(--font-mono); text-transform: uppercase; letter-spacing: 0.14em; border-bottom: 1px solid var(--ink-4); position: sticky; top: 0; }
+.table tbody tr { border-bottom: 1px solid var(--ink-4); transition: background 100ms; }
+.table tbody tr:last-child { border-bottom: 0; }
+.table tbody tr:hover { background: var(--ink-2); }
+.table tbody td { padding: 12px 14px; font-size: 12px; vertical-align: middle; }
+.t-time { font-family: var(--font-mono); color: var(--fg-3); font-size: 11px; }
+.t-type { color: var(--fg-0); font-weight: 500; font-family: var(--font-sans); }
+.t-ip   { font-family: var(--font-mono); color: var(--fg-2); font-size: 11px; }
+.t-port { font-family: var(--font-mono); color: var(--signal-300); font-size: 11px; }
+
+/* =========================================================
+   STATUS BAR — sticky footer with engine + ws status
+   ========================================================= */
+.console-statusbar {
+  grid-area: status;
+  height: var(--statusbar-h);
+  background: var(--ink-1);
+  border-top: 1px solid var(--ink-4);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 24px;
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.console-statusbar__seg { display: inline-flex; align-items: center; gap: 7px; }
+.console-statusbar__sep { color: var(--ink-6); }
+.console-statusbar__seg .v { color: var(--fg-1); }
+
+/* =========================================================
+   LEGACY FLOAT BUTTONS — repurposed into rail / topbar
+   ========================================================= */
+.viewswitcher  { display: none; }
+.logout-btn    {
+  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent; border: 1px solid transparent; color: var(--fg-3);
+  padding: 5px 10px; border-radius: 5px;
+  font: 500 11px/1 var(--font-mono); letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.logout-btn:hover { color: var(--critical); border-color: var(--critical-dim); }
+
+/* Hero attack-counter card (large stat) */
+.stat-hero {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  padding: 24px 24px;
+  min-height: 180px;
+}
+.stat-hero__num {
+  font: 200 96px/0.9 var(--font-sans);
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-0);
+}
+.armed .stat-hero__num { color: var(--critical); }
+.stat-hero__lede {
+  font: 400 14px/1.5 var(--font-sans);
+  color: var(--fg-2);
+  margin-top: 12px;
+  max-width: 36ch;
+}
+.stat-hero__icon { opacity: 0.4; align-self: flex-start; padding-top: 8px; }
+
+/* =========================================================
+   BRAND LOCKUP — BrandMark (login splash + classic sidebar)
+   Teal gradient tile to match the operations-console accent.
+   ========================================================= */
+.brand-tile {
+  background: linear-gradient(135deg, var(--signal-500) 0%, var(--signal-700) 100%);
+  border-radius: var(--radius-lg);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 0 22px -6px var(--signal-glow);
+}
+.brand-tile svg { color: white; }
+.brand-word { font-family: var(--font-sans); font-weight: 700; letter-spacing: 0.08em; color: white; line-height: 1; }
+.brand-sub  { font: 500 9px/1 var(--font-mono); letter-spacing: 0.3em; color: var(--signal-400); text-transform: uppercase; margin-top: 4px; }
+
+/* Yenile butonu spinner'ı */
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+/* Reduced-motion: kapat pulse/ping animasyonları */
+@media (prefers-reduced-motion: reduce) {
+  .dot--crit, .brand-tile, * { animation: none !important; }
+}
